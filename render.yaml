@@ -1,0 +1,17 @@
+# Render infrastructure definition for the backend service.
+# Docs: https://render.com/docs/infrastructure-as-code
+services:
+  - type: web
+    name: lemi-backend
+    env: docker
+    plan: free
+    autoDeploy: true
+    rootDir: .
+    dockerContext: .
+    dockerfilePath: Dockerfile.render
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: FRONTEND_ORIGINS
+        value: https://YOUR_FRONTEND_DOMAIN
+    healthCheckPath: /users
