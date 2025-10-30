@@ -19,7 +19,7 @@ services:
       - key: PYTHONUNBUFFERED
         value: "1"
       - key: FRONTEND_ORIGINS
-        value: https://YOUR_FRONTEND_DOMAIN
+        value: https://lemi-cite.netlify.app
       - key: DATABASE_URL
         fromDatabase:
           name: lemi-postgres
