@@ -311,7 +311,6 @@ import json
 from datetime import datetime
 
 class FullEvent(BaseModel):
-    id: int
     name: str
     description: str = ""
     location: str = ""
@@ -322,11 +321,11 @@ class FullEvent(BaseModel):
     time: str = ""
     category: str = ""
     languages: List[str] = []
-    isPublic: bool = True
-    type: str = "custom"
+    is_public: bool = True
+    event_type: str = "custom"
     capacity: int = None
-    imageUrl: str = ""
-    host: dict = None
+    image_url: str = ""
+    created_by: str = None
 
 @app.get("/api/events")
 def get_all_events():
@@ -384,11 +383,10 @@ def create_full_event(event: FullEvent):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("""
-        INSERT INTO events (id, name, description, location, venue, address, coordinates, 
+        INSERT INTO events (name, description, location, venue, address, coordinates, 
                           date, time, category, languages, is_public, event_type, capacity, image_url, created_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
-        event.id,
         event.name,
         event.description,
         event.location,
@@ -399,23 +397,25 @@ def create_full_event(event: FullEvent):
         event.time,
         event.category,
         json.dumps(event.languages),
-        1 if event.isPublic else 0,
-        event.type,
+        1 if event.is_public else 0,
+        event.event_type,
         event.capacity,
-        event.imageUrl,
-        event.host.get("name") if event.host else None
+        event.image_url,
+        event.created_by
     ))
     
-    # Add host as participant
-    if event.host:
+    event_id = c.lastrowid
+    
+    # Add creator as host/participant
+    if event.created_by:
         c.execute("""
             INSERT INTO event_participants (event_id, username, is_host)
             VALUES (?, ?, 1)
-        """, (event.id, event.host.get("name")))
+        """, (event_id, event.created_by))
     
     conn.commit()
     conn.close()
-    return {"id": event.id, "message": "Event created"}
+    return {"id": event_id, "message": "Event created"}
 
 @app.post("/api/events/{event_id}/join")
 def join_full_event(event_id: int, username: str = Body(..., embed=True)):
