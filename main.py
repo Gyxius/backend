@@ -8,6 +8,7 @@ from psycopg2.extras import RealDictCursor
 from passlib.context import CryptContext
 import os
 import json
+import sqlite3
 
 app = FastAPI()
 
@@ -56,6 +57,16 @@ def get_db_connection():
         import sqlite3
         return sqlite3.connect(SQLITE_PATH)
 
+def execute_query(cursor, query, params=None):
+    """Execute query with automatic placeholder conversion for PostgreSQL"""
+    if USE_POSTGRES and query:
+        # Convert SQLite ? placeholders to PostgreSQL %s
+        query = query.replace("?", "%s")
+    if params:
+        cursor.execute(query, params)
+    else:
+        cursor.execute(query)
+
 def init_db():
     """Initialize database tables (works with both PostgreSQL and SQLite)"""
     conn = get_db_connection()
@@ -74,7 +85,7 @@ def init_db():
         timestamp_col = "TEXT DEFAULT CURRENT_TIMESTAMP"
     
     # Users table
-    c.execute(f"""
+    execute_query(c, f"""
         CREATE TABLE IF NOT EXISTS users (
             id {id_col},
             username TEXT UNIQUE NOT NULL,
@@ -83,7 +94,7 @@ def init_db():
     """)
     
     # Enhanced events table with all fields
-    c.execute(f"""
+    execute_query(c, f"""
         CREATE TABLE IF NOT EXISTS events (
             id {id_col},
             name TEXT NOT NULL,
@@ -106,7 +117,7 @@ def init_db():
     """)
     
     # Friends table
-    c.execute(f"""
+    execute_query(c, f"""
         CREATE TABLE IF NOT EXISTS friends (
             user1 TEXT,
             user2 TEXT,
@@ -116,7 +127,7 @@ def init_db():
     """)
     
     # Friend requests table
-    c.execute(f"""
+    execute_query(c, f"""
         CREATE TABLE IF NOT EXISTS friend_requests (
             id {id_col},
             from_user TEXT,
@@ -126,7 +137,7 @@ def init_db():
     """)
     
     # Event participants
-    c.execute(f"""
+    execute_query(c, f"""
         CREATE TABLE IF NOT EXISTS event_participants (
             event_id INTEGER,
             username TEXT,
@@ -137,7 +148,7 @@ def init_db():
     """)
     
     # Suggested events
-    c.execute(f"""
+    execute_query(c, f"""
         CREATE TABLE IF NOT EXISTS suggested_events (
             id {id_col},
             username TEXT,
@@ -147,7 +158,7 @@ def init_db():
     """)
     
     # Chat messages
-    c.execute(f"""
+    execute_query(c, f"""
         CREATE TABLE IF NOT EXISTS chat_messages (
             id {id_col},
             event_id INTEGER,
@@ -158,7 +169,7 @@ def init_db():
     """)
     
     # Search requests table
-    c.execute(f"""
+    execute_query(c, f"""
         CREATE TABLE IF NOT EXISTS search_requests (
             id {id_col},
             user_id TEXT,
@@ -179,7 +190,7 @@ def init_db():
 def get_users():
     conn = get_db_connection()
     c = conn.cursor()
-    c.execute("SELECT id, username FROM users")
+    execute_query(c, "SELECT id, username FROM users")
     users = []
     for row in c.fetchall():
         if USE_POSTGRES:
@@ -192,22 +203,22 @@ def get_users():
 def upsert_user_with_password(c, username: str, password: str):
     # Ensure a user exists with a password (set or update password_hash), case-insensitive on username
     if USE_POSTGRES:
-        c.execute("SELECT id, password_hash, username FROM users WHERE lower(username) = lower(%s)", (username,))
+        execute_query(c, "SELECT id, password_hash, username FROM users WHERE lower(username) = lower(%s)", (username,))
     else:
-        c.execute("SELECT id, password_hash, username FROM users WHERE lower(username) = lower(?)", (username,))
+        execute_query(c, "SELECT id, password_hash, username FROM users WHERE lower(username) = lower(?)", (username,))
     row = c.fetchone()
     ph = pwd_context.hash(password)
     
     if USE_POSTGRES:
         if row:
-            c.execute("UPDATE users SET password_hash = %s WHERE lower(username) = lower(%s)", (ph, username))
+            execute_query(c, "UPDATE users SET password_hash = %s WHERE lower(username) = lower(%s)", (ph, username))
         else:
-            c.execute("INSERT INTO users (username, password_hash) VALUES (%s, %s)", (username, ph))
+            execute_query(c, "INSERT INTO users (username, password_hash) VALUES (%s, %s)", (username, ph))
     else:
         if row:
-            c.execute("UPDATE users SET password_hash = ? WHERE lower(username) = lower(?)", (ph, username))
+            execute_query(c, "UPDATE users SET password_hash = ? WHERE lower(username) = lower(?)", (ph, username))
         else:
-            c.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)", (username, ph))
+            execute_query(c, "INSERT INTO users (username, password_hash) VALUES (?, ?)", (username, ph))
 
 init_db()
 # Seed default users with password '123' for dev
@@ -235,10 +246,10 @@ class Event(BaseModel):
 
 @app.post("/login")
 def login(user: LoginRequest):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
     # Case-insensitive lookup
-    c.execute("SELECT id, password_hash, username FROM users WHERE lower(username) = lower(?)", (user.username,))
+    execute_query(c, "SELECT id, password_hash, username FROM users WHERE lower(username) = lower(?)", (user.username,))
     row = c.fetchone()
     if not row:
         conn.close()
@@ -252,16 +263,16 @@ def login(user: LoginRequest):
 
 @app.post("/register")
 def register(user: RegisterRequest):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
     # Enforce case-insensitive uniqueness
-    c.execute("SELECT id FROM users WHERE lower(username) = lower(?)", (user.username,))
+    execute_query(c, "SELECT id FROM users WHERE lower(username) = lower(?)", (user.username,))
     row = c.fetchone()
     if row:
         conn.close()
         raise HTTPException(status_code=400, detail="Username already exists")
     ph = pwd_context.hash(user.password)
-    c.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)", (user.username, ph))
+    execute_query(c, "INSERT INTO users (username, password_hash) VALUES (?, ?)", (user.username, ph))
     conn.commit()
     user_id = c.lastrowid
     conn.close()
@@ -270,9 +281,9 @@ def register(user: RegisterRequest):
 
 @app.get("/events")
 def get_events():
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("SELECT id, name, description FROM events")
+    execute_query(c, "SELECT id, name, description FROM events")
     events = [
         {"id": row[0], "name": row[1], "description": row[2]} for row in c.fetchall()
     ]
@@ -281,9 +292,9 @@ def get_events():
 
 @app.post("/events")
 def create_event(event: Event):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("INSERT INTO events (name, description) VALUES (?, ?)", (event.name, event.description))
+    execute_query(c, "INSERT INTO events (name, description) VALUES (?, ?)", (event.name, event.description))
     conn.commit()
     event_id = c.lastrowid
     conn.close()
@@ -291,18 +302,18 @@ def create_event(event: Event):
 
 @app.post("/join_event")
 def join_event(user_id: int, event_id: int):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("INSERT OR IGNORE INTO joined_events (user_id, event_id) VALUES (?, ?)", (user_id, event_id))
+    execute_query(c, "INSERT OR IGNORE INTO joined_events (user_id, event_id) VALUES (?, ?)", (user_id, event_id))
     conn.commit()
     conn.close()
     return {"message": "User joined event"}
 
 @app.get("/user_joined_events/{user_id}")
 def get_user_joined_events(user_id: int):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("""
+    execute_query(c, """
         SELECT events.id, events.name, events.description
         FROM events
         JOIN joined_events ON events.id = joined_events.event_id
@@ -330,9 +341,9 @@ class SearchRequest(BaseModel):
 
 @app.post("/search_requests")
 def create_search_request(req: SearchRequest):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("""
+    execute_query(c, """
         INSERT INTO search_requests (user_id, date, start, end, budget, type, category, language)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """, (req.userId, req.date, req.start, req.end, req.budget, req.type, req.category, req.language))
@@ -342,9 +353,9 @@ def create_search_request(req: SearchRequest):
 
 @app.get("/search_requests")
 def get_search_requests():
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("SELECT user_id, date, start, end, budget, type, category, language FROM search_requests")
+    execute_query(c, "SELECT user_id, date, start, end, budget, type, category, language FROM search_requests")
     requests = []
     for row in c.fetchall():
         requests.append({
@@ -385,9 +396,9 @@ class FullEvent(BaseModel):
 @app.get("/api/events")
 def get_all_events():
     """Get all public events with participants"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("""
+    execute_query(c, """
         SELECT id, name, description, location, venue, address, coordinates, 
                date, time, category, languages, is_public, event_type, capacity, image_url, created_by
         FROM events
@@ -397,7 +408,7 @@ def get_all_events():
     for row in c.fetchall():
         event_id = row[0]
         # Get participants
-        c.execute("SELECT username, is_host FROM event_participants WHERE event_id = ?", (event_id,))
+        execute_query(c, "SELECT username, is_host FROM event_participants WHERE event_id = ?", (event_id,))
         participants = []
         crew = []
         host = None
@@ -435,9 +446,9 @@ def get_all_events():
 @app.post("/api/events")
 def create_full_event(event: FullEvent):
     """Create a new event"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("""
+    execute_query(c, """
         INSERT INTO events (name, description, location, venue, address, coordinates, 
                           date, time, category, languages, is_public, event_type, capacity, image_url, created_by)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -463,7 +474,7 @@ def create_full_event(event: FullEvent):
     
     # Add creator as host/participant
     if event.created_by:
-        c.execute("""
+        execute_query(c, """
             INSERT INTO event_participants (event_id, username, is_host)
             VALUES (?, ?, 1)
         """, (event_id, event.created_by))
@@ -475,9 +486,9 @@ def create_full_event(event: FullEvent):
 @app.post("/api/events/{event_id}/join")
 def join_full_event(event_id: int, username: str = Body(..., embed=True)):
     """User joins an event"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("""
+    execute_query(c, """
         INSERT OR IGNORE INTO event_participants (event_id, username, is_host)
         VALUES (?, ?, 0)
     """, (event_id, username))
@@ -488,9 +499,9 @@ def join_full_event(event_id: int, username: str = Body(..., embed=True)):
 @app.post("/api/events/{event_id}/leave")
 def leave_event(event_id: int, username: str = Body(..., embed=True)):
     """User leaves an event"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("DELETE FROM event_participants WHERE event_id = ? AND username = ?", (event_id, username))
+    execute_query(c, "DELETE FROM event_participants WHERE event_id = ? AND username = ?", (event_id, username))
     conn.commit()
     conn.close()
     return {"message": "Left event"}
@@ -498,9 +509,9 @@ def leave_event(event_id: int, username: str = Body(..., embed=True)):
 @app.get("/api/users/{username}/events")
 def get_user_events(username: str):
     """Get all events a user has joined or is hosting"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("""
+    execute_query(c, """
         SELECT DISTINCT e.id, e.name, e.description, e.location, e.venue, e.address, e.coordinates,
                e.date, e.time, e.category, e.languages, e.is_public, e.event_type, e.capacity, e.image_url, e.created_by
         FROM events e
@@ -511,7 +522,7 @@ def get_user_events(username: str):
     for row in c.fetchall():
         event_id = row[0]
         # Get all participants for this event
-        c.execute("SELECT username, is_host FROM event_participants WHERE event_id = ?", (event_id,))
+        execute_query(c, "SELECT username, is_host FROM event_participants WHERE event_id = ?", (event_id,))
         participants = []
         crew = []
         host = None
@@ -549,9 +560,9 @@ def get_user_events(username: str):
 @app.get("/api/friends/{username}")
 def get_friends(username: str):
     """Get user's friends list"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("""
+    execute_query(c, """
         SELECT user2 FROM friends WHERE user1 = ?
         UNION
         SELECT user1 FROM friends WHERE user2 = ?
@@ -563,9 +574,9 @@ def get_friends(username: str):
 @app.post("/api/friends")
 def add_friend(user1: str = Body(...), user2: str = Body(...)):
     """Add a friendship"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("INSERT OR IGNORE INTO friends (user1, user2) VALUES (?, ?)", (user1, user2))
+    execute_query(c, "INSERT OR IGNORE INTO friends (user1, user2) VALUES (?, ?)", (user1, user2))
     conn.commit()
     conn.close()
     return {"message": "Friend added"}
@@ -573,9 +584,9 @@ def add_friend(user1: str = Body(...), user2: str = Body(...)):
 @app.get("/api/chat/{event_id}")
 def get_chat_messages(event_id: int):
     """Get chat messages for an event"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("""
+    execute_query(c, """
         SELECT username, message, timestamp
         FROM chat_messages
         WHERE event_id = ?
@@ -588,9 +599,9 @@ def get_chat_messages(event_id: int):
 @app.post("/api/chat/{event_id}")
 def send_chat_message(event_id: int, username: str = Body(...), message: str = Body(...)):
     """Send a chat message"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("""
+    execute_query(c, """
         INSERT INTO chat_messages (event_id, username, message)
         VALUES (?, ?, ?)
     """, (event_id, username, message))
