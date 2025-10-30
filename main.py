@@ -3,9 +3,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import List, Dict
-import sqlite3
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from passlib.context import CryptContext
 import os
+import json
 
 app = FastAPI()
 
@@ -29,29 +31,61 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-DB_PATH = "./social.db"
+# Database configuration - use PostgreSQL in production, SQLite for local dev
+DATABASE_URL = os.environ.get("DATABASE_URL")
+USE_POSTGRES = DATABASE_URL is not None
+
+# For local development without PostgreSQL
+SQLITE_PATH = "./social.db"
+
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+def param_placeholder():
+    """Return the correct parameter placeholder for the database type"""
+    return "%s" if USE_POSTGRES else "?"
+
+def get_db_connection():
+    """Get database connection (PostgreSQL or SQLite)"""
+    if USE_POSTGRES:
+        # Render provides DATABASE_URL starting with postgres://
+        # psycopg2 needs postgresql://
+        db_url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+        return psycopg2.connect(db_url, cursor_factory=RealDictCursor)
+    else:
+        # Local SQLite
+        import sqlite3
+        return sqlite3.connect(SQLITE_PATH)
+
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
+    """Initialize database tables (works with both PostgreSQL and SQLite)"""
+    conn = get_db_connection()
     c = conn.cursor()
-    c.execute("""
+    
+    # Adjust syntax based on database type
+    if USE_POSTGRES:
+        # PostgreSQL syntax
+        id_col = "SERIAL PRIMARY KEY"
+        bool_col = "BOOLEAN DEFAULT TRUE"
+        timestamp_col = "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+    else:
+        # SQLite syntax
+        id_col = "INTEGER PRIMARY KEY AUTOINCREMENT"
+        bool_col = "INTEGER DEFAULT 1"
+        timestamp_col = "TEXT DEFAULT CURRENT_TIMESTAMP"
+    
+    # Users table
+    c.execute(f"""
         CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {id_col},
             username TEXT UNIQUE NOT NULL,
             password_hash TEXT
         )
     """)
-    # Add column if migrating older DB
-    try:
-        c.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
-    except Exception:
-        pass
     
     # Enhanced events table with all fields
-    c.execute("""
+    c.execute(f"""
         CREATE TABLE IF NOT EXISTS events (
-            id INTEGER PRIMARY KEY,
+            id {id_col},
             name TEXT NOT NULL,
             description TEXT,
             location TEXT,
@@ -62,67 +96,79 @@ def init_db():
             time TEXT,
             category TEXT,
             languages TEXT,
-            is_public INTEGER DEFAULT 1,
+            is_public {bool_col},
             event_type TEXT,
             capacity INTEGER,
             image_url TEXT,
             created_by TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            created_at {timestamp_col}
         )
     """)
     
     # Friends table
-    c.execute("""
+    c.execute(f"""
         CREATE TABLE IF NOT EXISTS friends (
             user1 TEXT,
             user2 TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            created_at {timestamp_col},
             PRIMARY KEY (user1, user2)
         )
     """)
     
     # Friend requests table
-    c.execute("""
+    c.execute(f"""
         CREATE TABLE IF NOT EXISTS friend_requests (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {id_col},
             from_user TEXT,
             to_user TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            created_at {timestamp_col}
         )
     """)
     
-    # Event participants (replaces joined_events with more info)
-    c.execute("""
+    # Event participants
+    c.execute(f"""
         CREATE TABLE IF NOT EXISTS event_participants (
             event_id INTEGER,
             username TEXT,
             is_host INTEGER DEFAULT 0,
-            joined_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (event_id, username),
-            FOREIGN KEY (event_id) REFERENCES events(id)
+            joined_at {timestamp_col},
+            PRIMARY KEY (event_id, username)
         )
     """)
     
     # Suggested events
-    c.execute("""
+    c.execute(f"""
         CREATE TABLE IF NOT EXISTS suggested_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {id_col},
             username TEXT,
             event_id INTEGER,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (event_id) REFERENCES events(id)
+            created_at {timestamp_col}
         )
     """)
     
     # Chat messages
-    c.execute("""
+    c.execute(f"""
         CREATE TABLE IF NOT EXISTS chat_messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id {id_col},
             event_id INTEGER,
             username TEXT,
             message TEXT,
-            timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (event_id) REFERENCES events(id)
+            timestamp {timestamp_col}
+        )
+    """)
+    
+    # Search requests table
+    c.execute(f"""
+        CREATE TABLE IF NOT EXISTS search_requests (
+            id {id_col},
+            user_id TEXT,
+            date TEXT,
+            start TEXT,
+            end TEXT,
+            budget INTEGER,
+            type TEXT,
+            category TEXT,
+            language TEXT
         )
     """)
 
@@ -131,32 +177,41 @@ def init_db():
 
 @app.get("/users")
 def get_users():
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     c = conn.cursor()
     c.execute("SELECT id, username FROM users")
     users = []
     for row in c.fetchall():
-        users.append({
-            "id": row[0],
-            "username": row[1],
-        })
+        if USE_POSTGRES:
+            users.append({"id": row["id"], "username": row["username"]})
+        else:
+            users.append({"id": row[0], "username": row[1]})
     conn.close()
     return users
 
 def upsert_user_with_password(c, username: str, password: str):
     # Ensure a user exists with a password (set or update password_hash), case-insensitive on username
-    c.execute("SELECT id, password_hash, username FROM users WHERE lower(username) = lower(?)", (username,))
+    if USE_POSTGRES:
+        c.execute("SELECT id, password_hash, username FROM users WHERE lower(username) = lower(%s)", (username,))
+    else:
+        c.execute("SELECT id, password_hash, username FROM users WHERE lower(username) = lower(?)", (username,))
     row = c.fetchone()
     ph = pwd_context.hash(password)
-    if row:
-        # Set the password hash for ALL rows matching case-insensitive username to avoid duplicates mismatch
-        c.execute("UPDATE users SET password_hash = ? WHERE lower(username) = lower(?)", (ph, username))
+    
+    if USE_POSTGRES:
+        if row:
+            c.execute("UPDATE users SET password_hash = %s WHERE lower(username) = lower(%s)", (ph, username))
+        else:
+            c.execute("INSERT INTO users (username, password_hash) VALUES (%s, %s)", (username, ph))
     else:
-        c.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)", (username, ph))
+        if row:
+            c.execute("UPDATE users SET password_hash = ? WHERE lower(username) = lower(?)", (ph, username))
+        else:
+            c.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)", (username, ph))
 
 init_db()
-# Seed defaults with password '123' for dev
-conn_seed = sqlite3.connect(DB_PATH)
+# Seed default users with password '123' for dev
+conn_seed = get_db_connection()
 c_seed = conn_seed.cursor()
 for uname in ["admin", "Mitsu", "Zine", "Kat"]:
     try:
