@@ -21,12 +21,18 @@ def _get_allowed_origins():
     """
     origins = os.environ.get("FRONTEND_ORIGINS") or os.environ.get("FRONTEND_ORIGIN")
     if origins:
-        return [o.strip() for o in origins.split(",") if o.strip()]
+        origins_list = [o.strip() for o in origins.split(",") if o.strip()]
+        print(f"🔒 CORS: Allowing origins: {origins_list}")
+        return origins_list
+    print("⚠️  CORS: No FRONTEND_ORIGINS set, allowing all origins (*)")
     return ["*"]
+
+allowed_origins = _get_allowed_origins()
+print(f"🌐 Starting with CORS origins: {allowed_origins}")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_get_allowed_origins(),
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
