@@ -192,6 +192,16 @@ def init_db():
     conn.commit()
     conn.close()
 
+@app.get("/debug/env")
+def debug_env():
+    """Debug endpoint to check environment variables"""
+    return {
+        "FRONTEND_ORIGINS": os.environ.get("FRONTEND_ORIGINS", "NOT SET"),
+        "FRONTEND_ORIGIN": os.environ.get("FRONTEND_ORIGIN", "NOT SET"),
+        "DATABASE_URL": "SET" if os.environ.get("DATABASE_URL") else "NOT SET",
+        "USE_POSTGRES": USE_POSTGRES,
+    }
+
 @app.get("/users")
 def get_users():
     conn = get_db_connection()
