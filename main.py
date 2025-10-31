@@ -254,12 +254,18 @@ def login(user: LoginRequest):
     if not row:
         conn.close()
         raise HTTPException(status_code=404, detail="User not found. Please contact admin or use an existing account.")
-    user_id, password_hash = row[0], row[1]
+    if USE_POSTGRES:
+        user_id = row["id"]
+        password_hash = row["password_hash"]
+        username_val = row["username"]
+    else:
+        user_id, password_hash = row[0], row[1]
+        username_val = row[2]
     if not password_hash or not pwd_context.verify(user.password, password_hash):
         conn.close()
         raise HTTPException(status_code=401, detail="Invalid credentials")
     conn.close()
-    return {"id": user_id, "username": row[2]}
+    return {"id": user_id, "username": username_val}
 
 @app.post("/register")
 def register(user: RegisterRequest):
@@ -272,9 +278,22 @@ def register(user: RegisterRequest):
         conn.close()
         raise HTTPException(status_code=400, detail="Username already exists")
     ph = pwd_context.hash(user.password)
-    execute_query(c, "INSERT INTO users (username, password_hash) VALUES (?, ?)", (user.username, ph))
-    conn.commit()
-    user_id = c.lastrowid
+    if USE_POSTGRES:
+        c.execute(
+            """
+            INSERT INTO users (username, password_hash)
+            VALUES (%s, %s)
+            RETURNING id
+            """,
+            (user.username, ph),
+        )
+        row = c.fetchone()
+        user_id = row["id"] if (hasattr(row, "keys") or isinstance(row, dict)) else row[0]
+        conn.commit()
+    else:
+        execute_query(c, "INSERT INTO users (username, password_hash) VALUES (?, ?)", (user.username, ph))
+        conn.commit()
+        user_id = c.lastrowid
     conn.close()
     return {"id": user_id, "username": user.username}
 
@@ -398,48 +417,79 @@ def get_all_events():
     """Get all public events with participants"""
     conn = get_db_connection()
     c = conn.cursor()
-    execute_query(c, """
-        SELECT id, name, description, location, venue, address, coordinates, 
+    query = (
+        """
+        SELECT id, name, description, location, venue, address, coordinates,
                date, time, category, languages, is_public, event_type, capacity, image_url, created_by
         FROM events
         WHERE is_public = 1
-    """)
+        """
+    )
+    if USE_POSTGRES:
+        query = query.replace("is_public = 1", "is_public = TRUE")
+    execute_query(c, query)
     events = []
     for row in c.fetchall():
-        event_id = row[0]
+        # Support both SQLite tuple rows and Postgres dict rows
+        event_id = row["id"] if USE_POSTGRES else row[0]
         # Get participants
         execute_query(c, "SELECT username, is_host FROM event_participants WHERE event_id = ?", (event_id,))
         participants = []
         crew = []
         host = None
         for p in c.fetchall():
-            if p[1]:  # is_host
-                host = {"name": p[0]}
+            is_host = p["is_host"] if USE_POSTGRES else p[1]
+            uname = p["username"] if USE_POSTGRES else p[0]
+            if is_host:  # is_host
+                host = {"name": uname}
             else:
-                participants.append(p[0])
-                crew.append(p[0])
+                participants.append(uname)
+                crew.append(uname)
         
-        events.append({
-            "id": event_id,
-            "name": row[1],
-            "description": row[2] or "",
-            "location": row[3] or "",
-            "venue": row[4] or "",
-            "address": row[5] or "",
-            "coordinates": json.loads(row[6]) if row[6] else None,
-            "date": row[7] or "",
-            "time": row[8] or "",
-            "category": row[9] or "",
-            "languages": json.loads(row[10]) if row[10] else [],
-            "isPublic": bool(row[11]),
-            "type": row[12] or "custom",
-            "capacity": row[13],
-            "imageUrl": row[14] or "",
-            "createdBy": row[15],
-            "host": host,
-            "participants": participants,
-            "crew": crew
-        })
+        if USE_POSTGRES:
+            events.append({
+                "id": event_id,
+                "name": row["name"],
+                "description": row["description"] or "",
+                "location": row["location"] or "",
+                "venue": row["venue"] or "",
+                "address": row["address"] or "",
+                "coordinates": json.loads(row["coordinates"]) if row["coordinates"] else None,
+                "date": row["date"] or "",
+                "time": row["time"] or "",
+                "category": row["category"] or "",
+                "languages": json.loads(row["languages"]) if row["languages"] else [],
+                "isPublic": bool(row["is_public"]),
+                "type": row["event_type"] or "custom",
+                "capacity": row["capacity"],
+                "imageUrl": row["image_url"] or "",
+                "createdBy": row["created_by"],
+                "host": host,
+                "participants": participants,
+                "crew": crew
+            })
+        else:
+            events.append({
+                "id": event_id,
+                "name": row[1],
+                "description": row[2] or "",
+                "location": row[3] or "",
+                "venue": row[4] or "",
+                "address": row[5] or "",
+                "coordinates": json.loads(row[6]) if row[6] else None,
+                "date": row[7] or "",
+                "time": row[8] or "",
+                "category": row[9] or "",
+                "languages": json.loads(row[10]) if row[10] else [],
+                "isPublic": bool(row[11]),
+                "type": row[12] or "custom",
+                "capacity": row[13],
+                "imageUrl": row[14] or "",
+                "createdBy": row[15],
+                "host": host,
+                "participants": participants,
+                "crew": crew
+            })
     conn.close()
     return events
 
@@ -448,36 +498,75 @@ def create_full_event(event: FullEvent):
     """Create a new event"""
     conn = get_db_connection()
     c = conn.cursor()
-    execute_query(c, """
-        INSERT INTO events (name, description, location, venue, address, coordinates, 
-                          date, time, category, languages, is_public, event_type, capacity, image_url, created_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        event.name,
-        event.description,
-        event.location,
-        event.venue,
-        event.address,
-        json.dumps(event.coordinates) if event.coordinates else None,
-        event.date,
-        event.time,
-        event.category,
-        json.dumps(event.languages),
-        1 if event.is_public else 0,
-        event.event_type,
-        event.capacity,
-        event.image_url,
-        event.created_by
-    ))
-    
-    event_id = c.lastrowid
+    # Insert event and get the new id for both SQLite and PostgreSQL
+    if USE_POSTGRES:
+        c.execute(
+            """
+            INSERT INTO events (name, description, location, venue, address, coordinates,
+                              date, time, category, languages, is_public, event_type, capacity, image_url, created_by)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+            """,
+            (
+                event.name,
+                event.description,
+                event.location,
+                event.venue,
+                event.address,
+                json.dumps(event.coordinates) if event.coordinates else None,
+                event.date,
+                event.time,
+                event.category,
+                json.dumps(event.languages),
+                True if event.is_public else False,
+                event.event_type,
+                event.capacity,
+                event.image_url,
+                event.created_by,
+            ),
+        )
+        row = c.fetchone()
+        event_id = row["id"] if (hasattr(row, "keys") or isinstance(row, dict)) else row[0]
+    else:
+        execute_query(c, """
+            INSERT INTO events (name, description, location, venue, address, coordinates, 
+                              date, time, category, languages, is_public, event_type, capacity, image_url, created_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            event.name,
+            event.description,
+            event.location,
+            event.venue,
+            event.address,
+            json.dumps(event.coordinates) if event.coordinates else None,
+            event.date,
+            event.time,
+            event.category,
+            json.dumps(event.languages),
+            1 if event.is_public else 0,
+            event.event_type,
+            event.capacity,
+            event.image_url,
+            event.created_by
+        ))
+        event_id = c.lastrowid
     
     # Add creator as host/participant
     if event.created_by:
-        execute_query(c, """
-            INSERT INTO event_participants (event_id, username, is_host)
-            VALUES (?, ?, 1)
-        """, (event_id, event.created_by))
+        if USE_POSTGRES:
+            c.execute(
+                """
+                INSERT INTO event_participants (event_id, username, is_host)
+                VALUES (%s, %s, 1)
+                ON CONFLICT DO NOTHING
+                """,
+                (event_id, event.created_by),
+            )
+        else:
+            execute_query(c, """
+                INSERT OR IGNORE INTO event_participants (event_id, username, is_host)
+                VALUES (?, ?, 1)
+            """, (event_id, event.created_by))
     
     conn.commit()
     conn.close()
@@ -488,10 +577,20 @@ def join_full_event(event_id: int, username: str = Body(..., embed=True)):
     """User joins an event"""
     conn = get_db_connection()
     c = conn.cursor()
-    execute_query(c, """
-        INSERT OR IGNORE INTO event_participants (event_id, username, is_host)
-        VALUES (?, ?, 0)
-    """, (event_id, username))
+    if USE_POSTGRES:
+        c.execute(
+            """
+            INSERT INTO event_participants (event_id, username, is_host)
+            VALUES (%s, %s, 0)
+            ON CONFLICT DO NOTHING
+            """,
+            (event_id, username),
+        )
+    else:
+        execute_query(c, """
+            INSERT OR IGNORE INTO event_participants (event_id, username, is_host)
+            VALUES (?, ?, 0)
+        """, (event_id, username))
     conn.commit()
     conn.close()
     return {"message": "Joined event"}
@@ -520,40 +619,65 @@ def get_user_events(username: str):
     """, (username,))
     events = []
     for row in c.fetchall():
-        event_id = row[0]
+        event_id = row["id"] if USE_POSTGRES else row[0]
         # Get all participants for this event
         execute_query(c, "SELECT username, is_host FROM event_participants WHERE event_id = ?", (event_id,))
         participants = []
         crew = []
         host = None
         for p in c.fetchall():
-            if p[1]:
-                host = {"name": p[0]}
+            is_host = p["is_host"] if USE_POSTGRES else p[1]
+            uname = p["username"] if USE_POSTGRES else p[0]
+            if is_host:
+                host = {"name": uname}
             else:
-                participants.append(p[0])
-                crew.append(p[0])
-        
-        events.append({
-            "id": event_id,
-            "name": row[1],
-            "description": row[2] or "",
-            "location": row[3] or "",
-            "venue": row[4] or "",
-            "address": row[5] or "",
-            "coordinates": json.loads(row[6]) if row[6] else None,
-            "date": row[7] or "",
-            "time": row[8] or "",
-            "category": row[9] or "",
-            "languages": json.loads(row[10]) if row[10] else [],
-            "isPublic": bool(row[11]),
-            "type": row[12] or "custom",
-            "capacity": row[13],
-            "imageUrl": row[14] or "",
-            "createdBy": row[15],
-            "host": host,
-            "participants": participants,
-            "crew": crew
-        })
+                participants.append(uname)
+                crew.append(uname)
+
+        if USE_POSTGRES:
+            events.append({
+                "id": event_id,
+                "name": row["name"],
+                "description": row["description"] or "",
+                "location": row["location"] or "",
+                "venue": row["venue"] or "",
+                "address": row["address"] or "",
+                "coordinates": json.loads(row["coordinates"]) if row["coordinates"] else None,
+                "date": row["date"] or "",
+                "time": row["time"] or "",
+                "category": row["category"] or "",
+                "languages": json.loads(row["languages"]) if row["languages"] else [],
+                "isPublic": bool(row["is_public"]),
+                "type": row["event_type"] or "custom",
+                "capacity": row["capacity"],
+                "imageUrl": row["image_url"] or "",
+                "createdBy": row["created_by"],
+                "host": host,
+                "participants": participants,
+                "crew": crew
+            })
+        else:
+            events.append({
+                "id": event_id,
+                "name": row[1],
+                "description": row[2] or "",
+                "location": row[3] or "",
+                "venue": row[4] or "",
+                "address": row[5] or "",
+                "coordinates": json.loads(row[6]) if row[6] else None,
+                "date": row[7] or "",
+                "time": row[8] or "",
+                "category": row[9] or "",
+                "languages": json.loads(row[10]) if row[10] else [],
+                "isPublic": bool(row[11]),
+                "type": row[12] or "custom",
+                "capacity": row[13],
+                "imageUrl": row[14] or "",
+                "createdBy": row[15],
+                "host": host,
+                "participants": participants,
+                "crew": crew
+            })
     conn.close()
     return events
 
@@ -576,7 +700,17 @@ def add_friend(user1: str = Body(...), user2: str = Body(...)):
     """Add a friendship"""
     conn = get_db_connection()
     c = conn.cursor()
-    execute_query(c, "INSERT OR IGNORE INTO friends (user1, user2) VALUES (?, ?)", (user1, user2))
+    if USE_POSTGRES:
+        c.execute(
+            """
+            INSERT INTO friends (user1, user2)
+            VALUES (%s, %s)
+            ON CONFLICT DO NOTHING
+            """,
+            (user1, user2),
+        )
+    else:
+        execute_query(c, "INSERT OR IGNORE INTO friends (user1, user2) VALUES (?, ?)", (user1, user2))
     conn.commit()
     conn.close()
     return {"message": "Friend added"}
