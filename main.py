@@ -772,7 +772,12 @@ def get_chat_messages(event_id: int):
         WHERE event_id = ?
         ORDER BY timestamp ASC
     """, (event_id,))
-    messages = [{"username": row[0], "message": row[1], "timestamp": row[2]} for row in c.fetchall()]
+    messages = []
+    for row in c.fetchall():
+        if USE_POSTGRES:
+            messages.append({"username": row["username"], "message": row["message"], "timestamp": str(row["timestamp"])})
+        else:
+            messages.append({"username": row[0], "message": row[1], "timestamp": row[2]})
     conn.close()
     return messages
 
