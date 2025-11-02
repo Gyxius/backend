@@ -622,7 +622,7 @@ def leave_event(event_id: int, username: str = Body(..., embed=True)):
     return {"message": "Left event"}
 
 @app.delete("/api/events/{event_id}")
-def delete_event(event_id: int, username: str = Body(..., embed=True)):
+def delete_event(event_id: int, username: str):
     """Delete an event (only the host can delete)"""
     conn = get_db_connection()
     c = conn.cursor()
