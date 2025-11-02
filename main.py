@@ -180,8 +180,8 @@ def init_db():
             id {id_col},
             user_id TEXT,
             date TEXT,
-            start TEXT,
-            end TEXT,
+            start_time TEXT,
+            end_time TEXT,
             budget INTEGER,
             type TEXT,
             category TEXT,
@@ -379,7 +379,7 @@ def create_search_request(req: SearchRequest):
     conn = get_db_connection()
     c = conn.cursor()
     execute_query(c, """
-        INSERT INTO search_requests (user_id, date, start, end, budget, type, category, language)
+        INSERT INTO search_requests (user_id, date, start_time, end_time, budget, type, category, language)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """, (req.userId, req.date, req.start, req.end, req.budget, req.type, req.category, req.language))
     conn.commit()
@@ -390,7 +390,7 @@ def create_search_request(req: SearchRequest):
 def get_search_requests():
     conn = get_db_connection()
     c = conn.cursor()
-    execute_query(c, "SELECT user_id, date, start, end, budget, type, category, language FROM search_requests")
+    execute_query(c, "SELECT user_id, date, start_time, end_time, budget, type, category, language FROM search_requests")
     requests = []
     for row in c.fetchall():
         requests.append({
