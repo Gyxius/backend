@@ -621,6 +621,36 @@ def leave_event(event_id: int, username: str = Body(..., embed=True)):
     conn.close()
     return {"message": "Left event"}
 
+@app.delete("/api/events/{event_id}")
+def delete_event(event_id: int, username: str = Body(..., embed=True)):
+    """Delete an event (only the host can delete)"""
+    conn = get_db_connection()
+    c = conn.cursor()
+    
+    # Check if the user is the host of the event
+    execute_query(c, "SELECT created_by FROM events WHERE id = ?", (event_id,))
+    result = c.fetchone()
+    
+    if not result:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Event not found")
+    
+    created_by = result["created_by"] if USE_POSTGRES else result[0]
+    
+    if created_by != username:
+        conn.close()
+        raise HTTPException(status_code=403, detail="Only the host can delete this event")
+    
+    # Delete all participants first (foreign key constraint)
+    execute_query(c, "DELETE FROM event_participants WHERE event_id = ?", (event_id,))
+    
+    # Delete the event
+    execute_query(c, "DELETE FROM events WHERE id = ?", (event_id,))
+    
+    conn.commit()
+    conn.close()
+    return {"message": "Event deleted successfully"}
+
 @app.get("/api/users/{username}/events")
 def get_user_events(username: str):
     """Get all events a user has joined or is hosting"""
