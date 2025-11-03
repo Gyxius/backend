@@ -14,6 +14,9 @@ from pathlib import Path
 
 app = FastAPI()
 
+# Create static/uploads directory if it doesn't exist
+Path("./static/uploads").mkdir(parents=True, exist_ok=True)
+
 # Serve static files (logo, icon, etc.)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
