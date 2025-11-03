@@ -15,10 +15,16 @@ from pathlib import Path
 app = FastAPI()
 
 # Create static/uploads directory if it doesn't exist
-Path("./static/uploads").mkdir(parents=True, exist_ok=True)
-
-# Serve static files (logo, icon, etc.)
-app.mount("/static", StaticFiles(directory="static"), name="static")
+try:
+    static_dir = Path("./static")
+    static_dir.mkdir(parents=True, exist_ok=True)
+    uploads_dir = static_dir / "uploads"
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+    # Serve static files (logo, icon, etc.)
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+    print("✅ Static files mounted successfully")
+except Exception as e:
+    print(f"⚠️  Warning: Could not mount static files: {e}")
 
 def _get_allowed_origins():
     """Return CORS allowed origins list from env FRONTEND_ORIGINS/FRONTEND_ORIGIN.
