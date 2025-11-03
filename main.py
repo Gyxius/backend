@@ -203,6 +203,25 @@ def init_db():
     """)
 
     conn.commit()
+    
+    # Migration: Add is_featured column if it doesn't exist (for existing databases)
+    if USE_POSTGRES:
+        try:
+            execute_query(c, """
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name='events' AND column_name='is_featured'
+            """)
+            if not c.fetchone():
+                print("📝 Running migration: Adding is_featured column...")
+                execute_query(c, "ALTER TABLE events ADD COLUMN is_featured BOOLEAN DEFAULT FALSE")
+                execute_query(c, "UPDATE events SET is_featured = TRUE WHERE created_by = 'admin' AND capacity IS NULL")
+                conn.commit()
+                print("✅ Migration complete: is_featured column added")
+        except Exception as e:
+            print(f"⚠️  Migration check failed (might already exist): {e}")
+            conn.rollback()
+    
     conn.close()
 
 @app.get("/debug/env")
