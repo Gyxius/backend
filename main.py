@@ -1,14 +1,16 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from typing import List, Dict
+from typing import List, Dict, Optional
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from passlib.context import CryptContext
 import os
 import json
 import sqlite3
+import shutil
+from pathlib import Path
 
 app = FastAPI()
 
@@ -419,16 +421,16 @@ class FullEvent(BaseModel):
     location: str = ""
     venue: str = ""
     address: str = ""
-    coordinates: dict = None
+    coordinates: Optional[dict] = None
     date: str = ""
     time: str = ""
     category: str = ""
     languages: List[str] = []
     is_public: bool = True
     event_type: str = "custom"
-    capacity: int = None
+    capacity: Optional[int] = None
     image_url: str = ""
-    created_by: str = None
+    created_by: Optional[str] = None
 
 @app.get("/api/events")
 def get_all_events():
@@ -807,3 +809,99 @@ def send_chat_message(event_id: int, username: str = Body(...), message: str = B
     conn.commit()
     conn.close()
     return {"message": "Message sent"}
+
+@app.get("/api/geocode")
+async def geocode_proxy(q: str, limit: int = 5, countrycodes: str = "fr"):
+    """Proxy endpoint for OpenStreetMap Nominatim to avoid CORS issues"""
+    import httpx
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={
+                    "q": q,
+                    "format": "json",
+                    "addressdetails": 1,
+                    "limit": limit,
+                    "countrycodes": countrycodes
+                },
+                headers={
+                    "User-Agent": "LemiCite/1.0"
+                },
+                timeout=10.0
+            )
+            return response.json()
+    except Exception as e:
+        print(f"Error proxying geocode request: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/upload-image")
+async def upload_image(file: UploadFile = File(...)):
+    """Upload an image and return the URL"""
+    try:
+        # Create uploads directory if it doesn't exist
+        upload_dir = Path("./static/uploads")
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Validate file type
+        allowed_types = ["image/jpeg", "image/png", "image/gif", "image/webp"]
+        if file.content_type not in allowed_types:
+            raise HTTPException(status_code=400, detail="Invalid file type. Only JPEG, PNG, GIF, and WebP are allowed.")
+        
+        # Generate unique filename
+        file_extension = file.filename.split(".")[-1] if "." in file.filename else "jpg"
+        import time
+        filename = f"{int(time.time())}_{file.filename}"
+        file_path = upload_dir / filename
+        
+        # Save file
+        with file_path.open("wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        
+        # Return URL
+        image_url = f"/static/uploads/{filename}"
+        return {"url": image_url}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error uploading image: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/admin/pending-requests")
+def get_pending_requests():
+    """Get all pending search requests for admin assignment"""
+    conn = get_db_connection()
+    c = conn.cursor()
+    execute_query(c, """
+        SELECT id, user_id, date, start_time, end_time, budget, type, category, language
+        FROM search_requests
+        ORDER BY id DESC
+    """)
+    requests = []
+    for row in c.fetchall():
+        if USE_POSTGRES:
+            requests.append({
+                "id": row["id"],
+                "user_id": row["user_id"],
+                "date": row["date"],
+                "start_time": row["start_time"],
+                "end_time": row["end_time"],
+                "budget": row["budget"],
+                "type": row["type"],
+                "category": row["category"],
+                "language": row["language"]
+            })
+        else:
+            requests.append({
+                "id": row[0],
+                "user_id": row[1],
+                "date": row[2],
+                "start_time": row[3],
+                "end_time": row[4],
+                "budget": row[5],
+                "type": row[6],
+                "category": row[7],
+                "language": row[8]
+            })
+    conn.close()
+    return requests
