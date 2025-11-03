@@ -118,6 +118,8 @@ def init_db():
             capacity INTEGER,
             image_url TEXT,
             created_by TEXT,
+            is_featured {bool_col} DEFAULT {'FALSE' if USE_POSTGRES else '0'},
+            template_event_id INTEGER,
             created_at {timestamp_col}
         )
     """)
@@ -436,7 +438,7 @@ def get_all_events():
     query = (
         """
         SELECT id, name, description, location, venue, address, coordinates,
-               date, time, category, languages, is_public, event_type, capacity, image_url, created_by
+               date, time, category, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id
         FROM events
         WHERE is_public = 1
         """
@@ -480,6 +482,8 @@ def get_all_events():
                 "capacity": row["capacity"],
                 "imageUrl": row["image_url"] or "",
                 "createdBy": row["created_by"],
+                "isFeatured": bool(row["is_featured"]),
+                "templateEventId": row["template_event_id"],
                 "host": host,
                 "participants": participants,
                 "crew": crew
@@ -502,6 +506,8 @@ def get_all_events():
                 "capacity": row[13],
                 "imageUrl": row[14] or "",
                 "createdBy": row[15],
+                "isFeatured": bool(row[16]),
+                "templateEventId": row[17],
                 "host": host,
                 "participants": participants,
                 "crew": crew
@@ -519,8 +525,8 @@ def create_full_event(event: FullEvent):
         c.execute(
             """
             INSERT INTO events (name, description, location, venue, address, coordinates,
-                              date, time, category, languages, is_public, event_type, capacity, image_url, created_by)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                              date, time, category, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (
@@ -539,6 +545,8 @@ def create_full_event(event: FullEvent):
                 event.capacity,
                 event.image_url,
                 event.created_by,
+                getattr(event, 'is_featured', False),
+                getattr(event, 'template_event_id', None),
             ),
         )
         row = c.fetchone()
@@ -546,8 +554,8 @@ def create_full_event(event: FullEvent):
     else:
         execute_query(c, """
             INSERT INTO events (name, description, location, venue, address, coordinates, 
-                              date, time, category, languages, is_public, event_type, capacity, image_url, created_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                              date, time, category, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             event.name,
             event.description,
@@ -563,7 +571,9 @@ def create_full_event(event: FullEvent):
             event.event_type,
             event.capacity,
             event.image_url,
-            event.created_by
+            event.created_by,
+            1 if getattr(event, 'is_featured', False) else 0,
+            getattr(event, 'template_event_id', None)
         ))
         event_id = c.lastrowid
     
@@ -658,7 +668,7 @@ def get_user_events(username: str):
     c = conn.cursor()
     execute_query(c, """
         SELECT DISTINCT e.id, e.name, e.description, e.location, e.venue, e.address, e.coordinates,
-               e.date, e.time, e.category, e.languages, e.is_public, e.event_type, e.capacity, e.image_url, e.created_by
+               e.date, e.time, e.category, e.languages, e.is_public, e.event_type, e.capacity, e.image_url, e.created_by, e.is_featured, e.template_event_id
         FROM events e
         JOIN event_participants ep ON e.id = ep.event_id
         WHERE ep.username = ?
@@ -698,6 +708,8 @@ def get_user_events(username: str):
                 "capacity": row["capacity"],
                 "imageUrl": row["image_url"] or "",
                 "createdBy": row["created_by"],
+                "isFeatured": bool(row["is_featured"]),
+                "templateEventId": row["template_event_id"],
                 "host": host,
                 "participants": participants,
                 "crew": crew
@@ -720,6 +732,8 @@ def get_user_events(username: str):
                 "capacity": row[13],
                 "imageUrl": row[14] or "",
                 "createdBy": row[15],
+                "isFeatured": bool(row[16]),
+                "templateEventId": row[17],
                 "host": host,
                 "participants": participants,
                 "crew": crew
