@@ -1071,29 +1071,37 @@ async def geocode_proxy(q: str, limit: int = 5, countrycodes: str = "fr"):
     
     try:
         print(f"🔍 Geocoding request: q={q}, limit={limit}, countrycodes={countrycodes}")
+        
+        # Add delay to respect Nominatim rate limit (1 request per second)
+        import time
+        import asyncio
+        await asyncio.sleep(1.1)  # Wait 1.1 seconds between requests
+        
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 "https://nominatim.openstreetmap.org/search",
                 params={
-                    "q": q,
+                    "q": q + ", Paris, France",  # Add context to improve results
                     "format": "json",
                     "addressdetails": 1,
                     "limit": limit,
                     "countrycodes": countrycodes
                 },
                 headers={
-                    "User-Agent": "LemiCite/1.0 (contact@lemi-cite.app)"
+                    "User-Agent": "LemiCite/1.0 (contact@lemi-cite.app)",
+                    "Referer": "https://lemi-cite.netlify.app"
                 },
-                timeout=5.0  # Reduced timeout
+                timeout=10.0
             )
             print(f"✅ Geocoding response status: {response.status_code}")
             if response.status_code != 200:
                 print(f"❌ Nominatim error: {response.text}")
-                raise HTTPException(status_code=response.status_code, detail=f"Nominatim API error: {response.text}")
+                return []
             
             result = response.json()
             # Cache successful results
-            geocode_cache[cache_key] = result
+            if result:
+                geocode_cache[cache_key] = result
             return result
             
     except httpx.TimeoutException as e:
