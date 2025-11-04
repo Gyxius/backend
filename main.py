@@ -222,27 +222,45 @@ def init_db():
             else:
                 print("✅ is_featured column already exists")
             
-            # Migration: Add template_event_id column if it doesn't exist
+            # Migration: Ensure template_event_id is INTEGER
             c2.execute("""
-                SELECT column_name, data_type
+                SELECT data_type
                 FROM information_schema.columns 
-                WHERE table_name='events' AND column_name='template_event_id'
+                WHERE table_schema = current_schema()
+                  AND table_name='events' 
+                  AND column_name='template_event_id'
             """)
             result = c2.fetchone()
             if not result:
-                print("📝 Running migration: Adding template_event_id column...")
+                print("📝 Running migration: Adding template_event_id column (INTEGER)...")
                 c2.execute("ALTER TABLE events ADD COLUMN template_event_id INTEGER")
                 conn.commit()
-                print("✅ Migration complete: template_event_id column added")
-            elif result and result[1] == 'uuid':
-                print("📝 Running migration: Fixing template_event_id column type (UUID -> INTEGER)...")
-                # Drop the UUID column and recreate as INTEGER
-                c2.execute("ALTER TABLE events DROP COLUMN template_event_id")
-                c2.execute("ALTER TABLE events ADD COLUMN template_event_id INTEGER")
-                conn.commit()
-                print("✅ Migration complete: template_event_id column type fixed")
+                print("✅ Migration complete: template_event_id column (INTEGER) added")
             else:
-                print("✅ template_event_id column already exists")
+                dt = str(list(result.values())[0] if isinstance(result, dict) else result[0]).lower()
+                if dt not in ("integer", "bigint", "smallint"):
+                    print(f"📝 Running migration: Converting template_event_id from {dt} to INTEGER...")
+                    # Safer approach: rename old column, add new integer column, drop old
+                    try:
+                        c2.execute("ALTER TABLE events RENAME COLUMN template_event_id TO template_event_id_old")
+                        c2.execute("ALTER TABLE events ADD COLUMN template_event_id INTEGER")
+                        # No data transfer because types don't match meaningfully; null is fine
+                        c2.execute("ALTER TABLE events DROP COLUMN template_event_id_old")
+                        conn.commit()
+                        print("✅ Migration complete: template_event_id column type converted to INTEGER")
+                    except Exception as inner_e:
+                        conn.rollback()
+                        print(f"⚠️  Migration step failed, retrying with DROP/ADD: {inner_e}")
+                        try:
+                            c2.execute("ALTER TABLE events DROP COLUMN IF EXISTS template_event_id CASCADE")
+                            c2.execute("ALTER TABLE events ADD COLUMN template_event_id INTEGER")
+                            conn.commit()
+                            print("✅ Migration complete: template_event_id column recreated as INTEGER")
+                        except Exception as inner_e2:
+                            conn.rollback()
+                            print(f"❌ Migration failed to fix template_event_id type: {inner_e2}")
+                else:
+                    print("✅ template_event_id column already INTEGER-compatible")
             
             c2.close()
         except Exception as e:
@@ -656,6 +674,30 @@ def create_full_event(event: FullEvent):
     """Create a new event"""
     conn = get_db_connection()
     c = conn.cursor()
+    # Safety: if running on Postgres and the template_event_id column is of wrong type (e.g., uuid),
+    # avoid 500 by sending NULL until migration fixes it.
+    tpl_value = getattr(event, 'template_event_id', None)
+    if USE_POSTGRES:
+        try:
+            c.execute(
+                """
+                SELECT data_type
+                FROM information_schema.columns 
+                WHERE table_schema = current_schema()
+                  AND table_name='events' 
+                  AND column_name='template_event_id'
+                """
+            )
+            r = c.fetchone()
+            if r:
+                dt = str(list(r.values())[0] if isinstance(r, dict) else r[0]).lower()
+                if dt not in ("integer", "bigint", "smallint"):
+                    # Log once per process start would be nicer, but print here is fine.
+                    print("⚠️  template_event_id column is not INTEGER yet; inserting NULL to avoid failure.")
+                    tpl_value = None
+        except Exception as _e:
+            # If introspection fails, proceed without blocking creation
+            pass
     # Insert event and get the new id for both SQLite and PostgreSQL
     if USE_POSTGRES:
         c.execute(
@@ -682,7 +724,7 @@ def create_full_event(event: FullEvent):
                 event.image_url,
                 event.created_by,
                 getattr(event, 'is_featured', False),
-                getattr(event, 'template_event_id', None),
+                tpl_value,
             ),
         )
         row = c.fetchone()
