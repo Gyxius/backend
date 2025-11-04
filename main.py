@@ -575,30 +575,28 @@ def get_event_by_id(event_id: int):
         conn.close()
         raise HTTPException(status_code=404, detail="Event not found")
     
-    # Get host info
+    # Get participants and host
+    if USE_POSTGRES:
+        cursor.execute("SELECT username, is_host FROM event_participants WHERE event_id = %s", (event_id,))
+    else:
+        cursor.execute("SELECT username, is_host FROM event_participants WHERE event_id = ?", (event_id,))
+    
+    participants = []
+    crew = []
     host = None
-    if row[15]:  # created_by
-        user_data = get_user_data(row[15])
-        if user_data:
-            host = {
-                "name": user_data["name"],
-                "emoji": user_data.get("emoji", "👤"),
-                "interests": user_data.get("interests", [])
-            }
-    
-    # Get participants
-    if USE_POSTGRES:
-        cursor.execute("SELECT username FROM event_participants WHERE event_id = %s", (event_id,))
-    else:
-        cursor.execute("SELECT username FROM event_participants WHERE event_id = ?", (event_id,))
-    participants = [r[0] for r in cursor.fetchall()]
-    
-    # Get crew/co-hosts
-    if USE_POSTGRES:
-        cursor.execute("SELECT username FROM event_crew WHERE event_id = %s", (event_id,))
-    else:
-        cursor.execute("SELECT username FROM event_crew WHERE event_id = ?", (event_id,))
-    crew = [r[0] for r in cursor.fetchall()]
+    for p in cursor.fetchall():
+        if USE_POSTGRES:
+            is_host = p["is_host"]
+            uname = p["username"]
+        else:
+            uname = p[0]
+            is_host = p[1]
+        
+        if is_host:
+            host = {"name": uname}
+        else:
+            participants.append(uname)
+            crew.append(uname)
     
     conn.close()
     
