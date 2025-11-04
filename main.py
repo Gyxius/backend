@@ -554,7 +554,7 @@ def get_all_events():
 @app.get("/api/events/{event_id}")
 def get_event_by_id(event_id: int):
     """Get a single event by ID with all details"""
-    conn = get_db()
+    conn = get_db_connection()
     cursor = conn.cursor()
     
     if USE_POSTGRES:
