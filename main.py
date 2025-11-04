@@ -642,31 +642,56 @@ def get_event_by_id(event_id: int):
             crew.append(uname)
     
     conn.close()
-    
-    event_data = {
-        "id": row[0],
-        "name": row[1],
-        "description": row[2] or "",
-        "location": row[3] or "",
-        "venue": row[4] or "",
-        "address": row[5] or "",
-        "coordinates": json.loads(row[6]) if row[6] else None,
-        "date": row[7] or "",
-        "time": row[8] or "",
-        "category": row[9] or "",
-        "languages": json.loads(row[10]) if row[10] else [],
-        "isPublic": bool(row[11]),
-        "type": row[12] or "custom",
-        "capacity": row[13],
-        "imageUrl": row[14] or "",
-        "createdBy": row[15],
-        "isFeatured": bool(row[16]),
-        "templateEventId": row[17],
-        "host": host,
-        "participants": participants,
-        "crew": crew
-    }
-    
+
+    if USE_POSTGRES:
+        event_data = {
+            "id": row["id"],
+            "name": row["name"],
+            "description": row["description"] or "",
+            "location": row["location"] or "",
+            "venue": row["venue"] or "",
+            "address": row["address"] or "",
+            "coordinates": json.loads(row["coordinates"]) if row["coordinates"] else None,
+            "date": row["date"] or "",
+            "time": row["time"] or "",
+            "category": row["category"] or "",
+            "languages": json.loads(row["languages"]) if row["languages"] else [],
+            "isPublic": bool(row["is_public"]),
+            "type": row["event_type"] or "custom",
+            "capacity": row["capacity"],
+            "imageUrl": row["image_url"] or "",
+            "createdBy": row["created_by"],
+            "isFeatured": bool(row["is_featured"]),
+            "templateEventId": row["template_event_id"],
+            "host": host,
+            "participants": participants,
+            "crew": crew
+        }
+    else:
+        event_data = {
+            "id": row[0],
+            "name": row[1],
+            "description": row[2] or "",
+            "location": row[3] or "",
+            "venue": row[4] or "",
+            "address": row[5] or "",
+            "coordinates": json.loads(row[6]) if row[6] else None,
+            "date": row[7] or "",
+            "time": row[8] or "",
+            "category": row[9] or "",
+            "languages": json.loads(row[10]) if row[10] else [],
+            "isPublic": bool(row[11]),
+            "type": row[12] or "custom",
+            "capacity": row[13],
+            "imageUrl": row[14] or "",
+            "createdBy": row[15],
+            "isFeatured": bool(row[16]),
+            "templateEventId": row[17],
+            "host": host,
+            "participants": participants,
+            "crew": crew
+        }
+
     return event_data
 
 @app.post("/api/events")
