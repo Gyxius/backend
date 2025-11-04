@@ -2,7 +2,7 @@
 # Startup script that runs migration before starting the server
 
 echo "🚀 Running database migrations..."
-python migrate_add_is_featured.py || echo "⚠️  Migration failed or already applied"
+python migrate_add_is_featured.py || echo "⚠️  Migration failed or already applied - continuing anyway"
 
 echo "🌟 Starting FastAPI server..."
-uvicorn main:app --host 0.0.0.0 --port 8000
+exec uvicorn main:app --host 0.0.0.0 --port 8000
