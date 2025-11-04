@@ -465,6 +465,8 @@ class FullEvent(BaseModel):
     capacity: Optional[int] = None
     image_url: str = ""
     created_by: Optional[str] = None
+    is_featured: bool = False
+    template_event_id: Optional[int] = None
 
 @app.get("/api/events")
 def get_all_events():
