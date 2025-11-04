@@ -221,6 +221,21 @@ def init_db():
                 print("✅ Migration complete: is_featured column added")
             else:
                 print("✅ is_featured column already exists")
+            
+            # Migration: Add template_event_id column if it doesn't exist
+            c2.execute("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name='events' AND column_name='template_event_id'
+            """)
+            if not c2.fetchone():
+                print("📝 Running migration: Adding template_event_id column...")
+                c2.execute("ALTER TABLE events ADD COLUMN template_event_id INTEGER")
+                conn.commit()
+                print("✅ Migration complete: template_event_id column added")
+            else:
+                print("✅ template_event_id column already exists")
+            
             c2.close()
         except Exception as e:
             print(f"⚠️  Migration check failed: {e}")
