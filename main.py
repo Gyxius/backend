@@ -667,6 +667,96 @@ def leave_event(event_id: int, username: str = Body(..., embed=True)):
     conn.close()
     return {"message": "Left event"}
 
+@app.put("/api/events/{event_id}")
+def update_event(event_id: int, event: FullEvent):
+    """Update an event (only the host can update)"""
+    conn = get_db_connection()
+    c = conn.cursor()
+    
+    # Check if the user is the host of the event
+    execute_query(c, "SELECT created_by FROM events WHERE id = ?", (event_id,))
+    result = c.fetchone()
+    
+    if not result:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Event not found")
+    
+    event_creator = result[0] if not USE_POSTGRES else result["created_by"]
+    if event_creator != event.created_by:
+        conn.close()
+        raise HTTPException(status_code=403, detail="Only the event host can update this event")
+    
+    # Update the event
+    if USE_POSTGRES:
+        c.execute(
+            """
+            UPDATE events SET
+                name = %s,
+                description = %s,
+                location = %s,
+                venue = %s,
+                address = %s,
+                coordinates = %s,
+                date = %s,
+                time = %s,
+                category = %s,
+                languages = %s,
+                capacity = %s,
+                image_url = %s
+            WHERE id = %s
+            """,
+            (
+                event.name,
+                event.description,
+                event.location,
+                event.venue,
+                event.address,
+                json.dumps(event.coordinates) if event.coordinates else None,
+                event.date,
+                event.time,
+                event.category,
+                json.dumps(event.languages),
+                event.capacity,
+                event.image_url,
+                event_id,
+            ),
+        )
+    else:
+        execute_query(c, """
+            UPDATE events SET
+                name = ?,
+                description = ?,
+                location = ?,
+                venue = ?,
+                address = ?,
+                coordinates = ?,
+                date = ?,
+                time = ?,
+                category = ?,
+                languages = ?,
+                capacity = ?,
+                image_url = ?
+            WHERE id = ?
+        """, (
+            event.name,
+            event.description,
+            event.location,
+            event.venue,
+            event.address,
+            json.dumps(event.coordinates) if event.coordinates else None,
+            event.date,
+            event.time,
+            event.category,
+            json.dumps(event.languages),
+            event.capacity,
+            event.image_url,
+            event_id,
+        ))
+    
+    conn.commit()
+    conn.close()
+    return {"id": event_id, "message": "Event updated"}
+
 @app.delete("/api/events/{event_id}")
 def delete_event(event_id: int, username: str):
     """Delete an event (only the host can delete)"""
