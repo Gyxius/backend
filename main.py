@@ -551,6 +551,83 @@ def get_all_events():
     conn.close()
     return events
 
+@app.get("/api/events/{event_id}")
+def get_event_by_id(event_id: int):
+    """Get a single event by ID with all details"""
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    if USE_POSTGRES:
+        cursor.execute("""
+            SELECT id, name, description, location, venue, address, coordinates, 
+                   date, time, category, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id
+            FROM events WHERE id = %s
+        """, (event_id,))
+    else:
+        cursor.execute("""
+            SELECT id, name, description, location, venue, address, coordinates, 
+                   date, time, category, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id
+            FROM events WHERE id = ?
+        """, (event_id,))
+    
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Event not found")
+    
+    # Get host info
+    host = None
+    if row[15]:  # created_by
+        user_data = get_user_data(row[15])
+        if user_data:
+            host = {
+                "name": user_data["name"],
+                "emoji": user_data.get("emoji", "👤"),
+                "interests": user_data.get("interests", [])
+            }
+    
+    # Get participants
+    if USE_POSTGRES:
+        cursor.execute("SELECT username FROM event_participants WHERE event_id = %s", (event_id,))
+    else:
+        cursor.execute("SELECT username FROM event_participants WHERE event_id = ?", (event_id,))
+    participants = [r[0] for r in cursor.fetchall()]
+    
+    # Get crew/co-hosts
+    if USE_POSTGRES:
+        cursor.execute("SELECT username FROM event_crew WHERE event_id = %s", (event_id,))
+    else:
+        cursor.execute("SELECT username FROM event_crew WHERE event_id = ?", (event_id,))
+    crew = [r[0] for r in cursor.fetchall()]
+    
+    conn.close()
+    
+    event_data = {
+        "id": row[0],
+        "name": row[1],
+        "description": row[2] or "",
+        "location": row[3] or "",
+        "venue": row[4] or "",
+        "address": row[5] or "",
+        "coordinates": json.loads(row[6]) if row[6] else None,
+        "date": row[7] or "",
+        "time": row[8] or "",
+        "category": row[9] or "",
+        "languages": json.loads(row[10]) if row[10] else [],
+        "isPublic": bool(row[11]),
+        "type": row[12] or "custom",
+        "capacity": row[13],
+        "imageUrl": row[14] or "",
+        "createdBy": row[15],
+        "isFeatured": bool(row[16]),
+        "templateEventId": row[17],
+        "host": host,
+        "participants": participants,
+        "crew": crew
+    }
+    
+    return event_data
+
 @app.post("/api/events")
 def create_full_event(event: FullEvent):
     """Create a new event"""
