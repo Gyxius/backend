@@ -1014,6 +1014,7 @@ async def geocode_proxy(q: str, limit: int = 5, countrycodes: str = "fr"):
     """Proxy endpoint for OpenStreetMap Nominatim to avoid CORS issues"""
     import httpx
     try:
+        print(f"🔍 Geocoding request: q={q}, limit={limit}, countrycodes={countrycodes}")
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 "https://nominatim.openstreetmap.org/search",
@@ -1025,13 +1026,23 @@ async def geocode_proxy(q: str, limit: int = 5, countrycodes: str = "fr"):
                     "countrycodes": countrycodes
                 },
                 headers={
-                    "User-Agent": "LemiCite/1.0"
+                    "User-Agent": "LemiCite/1.0 (contact@lemi-cite.app)"
                 },
                 timeout=10.0
             )
+            print(f"✅ Geocoding response status: {response.status_code}")
+            if response.status_code != 200:
+                print(f"❌ Nominatim error: {response.text}")
+                raise HTTPException(status_code=response.status_code, detail=f"Nominatim API error: {response.text}")
             return response.json()
+    except httpx.TimeoutException as e:
+        print(f"⏱️ Geocoding timeout: {e}")
+        raise HTTPException(status_code=504, detail="Geocoding service timeout")
+    except httpx.HTTPError as e:
+        print(f"🌐 HTTP error during geocoding: {e}")
+        raise HTTPException(status_code=502, detail=f"Failed to connect to geocoding service: {str(e)}")
     except Exception as e:
-        print(f"Error proxying geocode request: {e}")
+        print(f"❌ Error proxying geocode request: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/upload-image")
