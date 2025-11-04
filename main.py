@@ -224,15 +224,23 @@ def init_db():
             
             # Migration: Add template_event_id column if it doesn't exist
             c2.execute("""
-                SELECT column_name 
+                SELECT column_name, data_type
                 FROM information_schema.columns 
                 WHERE table_name='events' AND column_name='template_event_id'
             """)
-            if not c2.fetchone():
+            result = c2.fetchone()
+            if not result:
                 print("📝 Running migration: Adding template_event_id column...")
                 c2.execute("ALTER TABLE events ADD COLUMN template_event_id INTEGER")
                 conn.commit()
                 print("✅ Migration complete: template_event_id column added")
+            elif result and result[1] == 'uuid':
+                print("📝 Running migration: Fixing template_event_id column type (UUID -> INTEGER)...")
+                # Drop the UUID column and recreate as INTEGER
+                c2.execute("ALTER TABLE events DROP COLUMN template_event_id")
+                c2.execute("ALTER TABLE events ADD COLUMN template_event_id INTEGER")
+                conn.commit()
+                print("✅ Migration complete: template_event_id column type fixed")
             else:
                 print("✅ template_event_id column already exists")
             
