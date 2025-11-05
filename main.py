@@ -944,7 +944,7 @@ def delete_event(event_id: int, username: str):
     conn = get_db_connection()
     c = conn.cursor()
     
-    # Check if the user is the host of the event
+    # Check if the user is the host of the event or is admin
     execute_query(c, "SELECT created_by FROM events WHERE id = ?", (event_id,))
     result = c.fetchone()
     
@@ -954,9 +954,10 @@ def delete_event(event_id: int, username: str):
     
     created_by = result["created_by"] if USE_POSTGRES else result[0]
     
-    if created_by != username:
+    # Allow deletion if user is the host OR if user is admin
+    if created_by != username and username.lower() != "admin":
         conn.close()
-        raise HTTPException(status_code=403, detail="Only the host can delete this event")
+        raise HTTPException(status_code=403, detail="Only the host or admin can delete this event")
     
     # Delete all participants first (foreign key constraint)
     execute_query(c, "DELETE FROM event_participants WHERE event_id = ?", (event_id,))
