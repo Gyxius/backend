@@ -58,6 +58,20 @@ SQLITE_PATH = "./social.db"
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+def normalize_image_url(image_url: str) -> str:
+    """Convert relative image URLs to absolute URLs for cross-origin access"""
+    if not image_url:
+        return ""
+    # If already absolute, return as-is
+    if image_url.startswith("http://") or image_url.startswith("https://"):
+        return image_url
+    # Convert relative URL to absolute
+    backend_url = os.environ.get("BACKEND_URL", "https://fast-api-backend-qlyb.onrender.com")
+    # Remove leading slash if present to avoid double slashes
+    if image_url.startswith("/"):
+        return f"{backend_url}{image_url}"
+    return f"{backend_url}/{image_url}"
+
 def param_placeholder():
     """Return the correct parameter placeholder for the database type"""
     return "%s" if USE_POSTGRES else "?"
@@ -573,7 +587,7 @@ def get_all_events():
                 "isPublic": bool(row["is_public"]),
                 "type": row["event_type"] or "custom",
                 "capacity": row["capacity"],
-                "imageUrl": row["image_url"] or "",
+                "imageUrl": normalize_image_url(row["image_url"] or ""),
                 "createdBy": row["created_by"],
                 "isFeatured": bool(row["is_featured"]),
                 "templateEventId": row["template_event_id"],
@@ -597,7 +611,7 @@ def get_all_events():
                 "isPublic": bool(row[11]),
                 "type": row[12] or "custom",
                 "capacity": row[13],
-                "imageUrl": row[14] or "",
+                "imageUrl": normalize_image_url(row[14] or ""),
                 "createdBy": row[15],
                 "isFeatured": bool(row[16]),
                 "templateEventId": row[17],
@@ -673,7 +687,7 @@ def get_event_by_id(event_id: int):
             "isPublic": bool(row["is_public"]),
             "type": row["event_type"] or "custom",
             "capacity": row["capacity"],
-            "imageUrl": row["image_url"] or "",
+            "imageUrl": normalize_image_url(row["image_url"] or ""),
             "createdBy": row["created_by"],
             "isFeatured": bool(row["is_featured"]),
             "templateEventId": row["template_event_id"],
@@ -697,7 +711,7 @@ def get_event_by_id(event_id: int):
             "isPublic": bool(row[11]),
             "type": row[12] or "custom",
             "capacity": row[13],
-            "imageUrl": row[14] or "",
+            "imageUrl": normalize_image_url(row[14] or ""),
             "createdBy": row[15],
             "isFeatured": bool(row[16]),
             "templateEventId": row[17],
@@ -1015,7 +1029,7 @@ def get_user_events(username: str):
                 "isPublic": bool(row["is_public"]),
                 "type": row["event_type"] or "custom",
                 "capacity": row["capacity"],
-                "imageUrl": row["image_url"] or "",
+                "imageUrl": normalize_image_url(row["image_url"] or ""),
                 "createdBy": row["created_by"],
                 "isFeatured": bool(row["is_featured"]),
                 "templateEventId": row["template_event_id"],
@@ -1039,7 +1053,7 @@ def get_user_events(username: str):
                 "isPublic": bool(row[11]),
                 "type": row[12] or "custom",
                 "capacity": row[13],
-                "imageUrl": row[14] or "",
+                "imageUrl": normalize_image_url(row[14] or ""),
                 "createdBy": row[15],
                 "isFeatured": bool(row[16]),
                 "templateEventId": row[17],
@@ -1335,8 +1349,10 @@ async def upload_image(file: UploadFile = File(...)):
         with file_path.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
         
-        # Return URL
-        image_url = f"/static/uploads/{filename}"
+        # Return absolute URL for cross-origin access
+        # Get the backend URL from environment or construct it
+        backend_url = os.environ.get("BACKEND_URL", "https://fast-api-backend-qlyb.onrender.com")
+        image_url = f"{backend_url}/static/uploads/{filename}"
         return {"url": image_url}
     except HTTPException:
         raise
