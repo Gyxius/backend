@@ -137,9 +137,9 @@ def init_db():
         )
     """)
     
-    # Friends table
+    # Follows table
     execute_query(c, f"""
-        CREATE TABLE IF NOT EXISTS friends (
+        CREATE TABLE IF NOT EXISTS follows (
             user1 TEXT,
             user2 TEXT,
             created_at {timestamp_col},
@@ -147,9 +147,9 @@ def init_db():
         )
     """)
     
-    # Friend requests table
+    # Follow requests table
     execute_query(c, f"""
-        CREATE TABLE IF NOT EXISTS friend_requests (
+        CREATE TABLE IF NOT EXISTS follow_requests (
             id {id_col},
             from_user TEXT,
             to_user TEXT,
@@ -1050,39 +1050,39 @@ def get_user_events(username: str):
     conn.close()
     return events
 
-@app.get("/api/friends/{username}")
-def get_friends(username: str):
-    """Get user's friends list"""
+@app.get("/api/follows/{username}")
+def get_follows(username: str):
+    """Get user's follows list"""
     conn = get_db_connection()
     c = conn.cursor()
     execute_query(c, """
-        SELECT user2 FROM friends WHERE user1 = ?
+        SELECT user2 FROM follows WHERE user1 = ?
         UNION
-        SELECT user1 FROM friends WHERE user2 = ?
+        SELECT user1 FROM follows WHERE user2 = ?
     """, (username, username))
-    friends = [row[0] for row in c.fetchall()]
+    follows = [row[0] for row in c.fetchall()]
     conn.close()
-    return friends
+    return follows
 
-@app.post("/api/friends")
-def add_friend(user1: str = Body(...), user2: str = Body(...)):
-    """Add a friendship"""
+@app.post("/api/follows")
+def add_follow(user1: str = Body(...), user2: str = Body(...)):
+    """Add a follow"""
     conn = get_db_connection()
     c = conn.cursor()
     if USE_POSTGRES:
         c.execute(
             """
-            INSERT INTO friends (user1, user2)
+            INSERT INTO follows (user1, user2)
             VALUES (%s, %s)
             ON CONFLICT DO NOTHING
             """,
             (user1, user2),
         )
     else:
-        execute_query(c, "INSERT OR IGNORE INTO friends (user1, user2) VALUES (?, ?)", (user1, user2))
+        execute_query(c, "INSERT OR IGNORE INTO follows (user1, user2) VALUES (?, ?)", (user1, user2))
     conn.commit()
     conn.close()
-    return {"message": "Friend added"}
+    return {"message": "Follow added"}
 
 @app.get("/api/chat/{event_id}")
 def get_chat_messages(event_id: int):
