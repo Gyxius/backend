@@ -125,6 +125,31 @@ def init_db():
             password_hash TEXT
         )
     """)
+    # Ensure invite_code column exists on users table
+    try:
+        if USE_POSTGRES:
+            c.execute(
+                """
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name='users' AND column_name='invite_code') THEN
+                        ALTER TABLE users ADD COLUMN invite_code TEXT UNIQUE;
+                    END IF;
+                END$$;
+                """
+            )
+            conn.commit()
+        else:
+            c.execute("PRAGMA table_info(users);")
+            cols = [row[1] for row in c.fetchall()]
+            if 'invite_code' not in cols:
+                execute_query(c, "ALTER TABLE users ADD COLUMN invite_code TEXT")
+                execute_query(c, "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_invite_code ON users(invite_code)")
+                conn.commit()
+    except Exception as e:
+        print(f"[init_db] invite_code migration notice: {e}")
     
     # Enhanced events table with all fields
     execute_query(c, f"""
@@ -362,6 +387,7 @@ class LoginRequest(BaseModel):
 class RegisterRequest(BaseModel):
     username: str
     password: str
+    inviteCode: Optional[str] = None
 
 class Event(BaseModel):
     name: str
@@ -394,6 +420,20 @@ def login(user: LoginRequest):
 def register(user: RegisterRequest):
     conn = get_db_connection()
     c = conn.cursor()
+    # Validate invite code if provided
+    try:
+        code = (user.inviteCode or '').strip()
+    except Exception:
+        code = ''
+    if code:
+        if USE_POSTGRES:
+            c.execute("SELECT username FROM users WHERE invite_code = %s", (code,))
+        else:
+            execute_query(c, "SELECT username FROM users WHERE invite_code = ?", (code,))
+        owner = c.fetchone()
+        if not owner:
+            conn.close()
+            raise HTTPException(status_code=400, detail="Invalid invite code")
     # Enforce case-insensitive uniqueness
     execute_query(c, "SELECT id FROM users WHERE lower(username) = lower(?)", (user.username,))
     row = c.fetchone()
@@ -517,6 +557,82 @@ def get_search_requests():
 
 import json
 from datetime import datetime
+import random
+import string
+
+# -------------------- Invite Code APIs --------------------
+def _generate_invite_segment(length: int = 4) -> str:
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
+
+def generate_invite_code() -> str:
+    return f"LEMI-{_generate_invite_segment()}-{_generate_invite_segment()}"
+
+def _get_unique_invite_code(c) -> str:
+    while True:
+        code = generate_invite_code()
+        if USE_POSTGRES:
+            c.execute("SELECT 1 FROM users WHERE invite_code = %s", (code,))
+        else:
+            execute_query(c, "SELECT 1 FROM users WHERE invite_code = ?", (code,))
+        if not c.fetchone():
+            return code
+
+@app.get("/api/users/{username}/invite-code")
+def get_user_invite_code(username: str):
+    conn = get_db_connection()
+    c = conn.cursor()
+    if USE_POSTGRES:
+        c.execute("SELECT invite_code FROM users WHERE lower(username)=lower(%s)", (username,))
+        row = c.fetchone()
+        invite_code = row["invite_code"] if row and (hasattr(row, "keys") or isinstance(row, dict)) else (row[0] if row else None)
+    else:
+        execute_query(c, "SELECT invite_code FROM users WHERE lower(username)=lower(?)", (username,))
+        r = c.fetchone()
+        invite_code = r[0] if r else None
+    conn.close()
+    if invite_code is None:
+        # Return explicitly null if no code yet
+        return {"invite_code": None}
+    return {"invite_code": invite_code}
+
+@app.post("/api/users/{username}/invite-code")
+def create_or_rotate_invite_code(username: str):
+    conn = get_db_connection()
+    c = conn.cursor()
+    # Ensure user exists
+    if USE_POSTGRES:
+        c.execute("SELECT id FROM users WHERE lower(username)=lower(%s)", (username,))
+    else:
+        execute_query(c, "SELECT id FROM users WHERE lower(username)=lower(?)", (username,))
+    row = c.fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="User not found")
+    code = _get_unique_invite_code(c)
+    if USE_POSTGRES:
+        c.execute("UPDATE users SET invite_code=%s WHERE lower(username)=lower(%s)", (code, username))
+    else:
+        execute_query(c, "UPDATE users SET invite_code=? WHERE lower(username)=lower(?)", (code, username))
+    conn.commit()
+    conn.close()
+    return {"invite_code": code}
+
+@app.get("/api/invites/validate")
+def validate_invite(code: str):
+    conn = get_db_connection()
+    c = conn.cursor()
+    inviter = None
+    if USE_POSTGRES:
+        c.execute("SELECT username FROM users WHERE invite_code = %s", (code,))
+        row = c.fetchone()
+        if row:
+            inviter = row["username"] if (hasattr(row, "keys") or isinstance(row, dict)) else row[0]
+    else:
+        execute_query(c, "SELECT username FROM users WHERE invite_code = ?", (code,))
+        r = c.fetchone()
+        inviter = r[0] if r else None
+    conn.close()
+    return {"valid": inviter is not None, "inviter": inviter}
 
 class FullEvent(BaseModel):
     name: str
