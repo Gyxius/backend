@@ -94,11 +94,13 @@ def init_db():
         # PostgreSQL syntax
         id_col = "SERIAL PRIMARY KEY"
         bool_col = "BOOLEAN DEFAULT TRUE"
+        bool_col_false = "BOOLEAN DEFAULT FALSE"
         timestamp_col = "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
     else:
         # SQLite syntax
         id_col = "INTEGER PRIMARY KEY AUTOINCREMENT"
         bool_col = "INTEGER DEFAULT 1"
+        bool_col_false = "INTEGER DEFAULT 0"
         timestamp_col = "TEXT DEFAULT CURRENT_TIMESTAMP"
     
     # Users table
@@ -184,6 +186,18 @@ def init_db():
             username TEXT,
             message TEXT,
             timestamp {timestamp_col}
+        )
+    """)
+    
+    # Notifications table for unread messages
+    execute_query(c, f"""
+        CREATE TABLE IF NOT EXISTS notifications (
+            id {id_col},
+            user_id TEXT,
+            event_id INTEGER,
+            message_id INTEGER,
+            is_read {bool_col_false},
+            created_at {timestamp_col}
         )
     """)
     
@@ -1090,16 +1104,101 @@ def get_chat_messages(event_id: int):
 
 @app.post("/api/chat/{event_id}")
 def send_chat_message(event_id: int, username: str = Body(...), message: str = Body(...)):
-    """Send a chat message"""
+    """Send a chat message and create notifications for other participants"""
     conn = get_db_connection()
     c = conn.cursor()
+    
+    # Insert the message
     execute_query(c, """
         INSERT INTO chat_messages (event_id, username, message)
         VALUES (?, ?, ?)
     """, (event_id, username, message))
+    
+    # Get the message ID
+    if USE_POSTGRES:
+        execute_query(c, "SELECT lastval()")
+        message_id = c.fetchone()[0]
+    else:
+        message_id = c.lastrowid
+    
+    # Get all participants of the event (including host)
+    execute_query(c, """
+        SELECT username FROM event_participants WHERE event_id = ?
+    """, (event_id,))
+    
+    participants = []
+    for row in c.fetchall():
+        participant_name = row["username"] if USE_POSTGRES else row[0]
+        # Don't notify the sender
+        if participant_name != username:
+            participants.append(participant_name)
+    
+    # Create notifications for all other participants
+    for participant in participants:
+        execute_query(c, """
+            INSERT INTO notifications (user_id, event_id, message_id, is_read)
+            VALUES (?, ?, ?, ?)
+        """, (participant, event_id, message_id, False if USE_POSTGRES else 0))
+    
     conn.commit()
     conn.close()
-    return {"message": "Message sent"}
+    return {"message": "Message sent", "notifications_created": len(participants)}
+
+@app.get("/api/notifications/{username}")
+def get_notifications(username: str):
+    """Get unread notification count and details for a user"""
+    conn = get_db_connection()
+    c = conn.cursor()
+    
+    # Get unread notifications grouped by event
+    execute_query(c, """
+        SELECT event_id, COUNT(*) as unread_count
+        FROM notifications
+        WHERE user_id = ? AND is_read = ?
+        GROUP BY event_id
+    """, (username, False if USE_POSTGRES else 0))
+    
+    notifications = {}
+    for row in c.fetchall():
+        if USE_POSTGRES:
+            notifications[row["event_id"]] = row["unread_count"]
+        else:
+            notifications[row[0]] = row[1]
+    
+    # Get total unread count
+    total_unread = sum(notifications.values())
+    
+    conn.close()
+    return {
+        "total_unread": total_unread,
+        "by_event": notifications
+    }
+
+@app.post("/api/notifications/{username}/mark-read")
+def mark_notifications_read(username: str, event_id: Optional[int] = Body(None)):
+    """Mark notifications as read for a user. If event_id provided, mark only for that event."""
+    conn = get_db_connection()
+    c = conn.cursor()
+    
+    if event_id is not None:
+        # Mark notifications for specific event as read
+        execute_query(c, """
+            UPDATE notifications
+            SET is_read = ?
+            WHERE user_id = ? AND event_id = ?
+        """, (True if USE_POSTGRES else 1, username, event_id))
+    else:
+        # Mark all notifications as read
+        execute_query(c, """
+            UPDATE notifications
+            SET is_read = ?
+            WHERE user_id = ?
+        """, (True if USE_POSTGRES else 1, username))
+    
+    conn.commit()
+    rows_affected = c.rowcount
+    conn.close()
+    return {"message": "Notifications marked as read", "count": rows_affected}
 
 # Simple geocoding cache to reduce API calls
 geocode_cache = {}
