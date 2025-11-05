@@ -854,7 +854,7 @@ def update_event(event_id: int, event: FullEvent):
     conn = get_db_connection()
     c = conn.cursor()
     
-    # Check if the user is the host of the event
+    # Check if the user is the host of the event or is admin
     execute_query(c, "SELECT created_by FROM events WHERE id = ?", (event_id,))
     result = c.fetchone()
     
@@ -863,9 +863,10 @@ def update_event(event_id: int, event: FullEvent):
         raise HTTPException(status_code=404, detail="Event not found")
     
     event_creator = result[0] if not USE_POSTGRES else result["created_by"]
-    if event_creator != event.created_by:
+    # Allow update if user is the host OR if user is admin
+    if event_creator != event.created_by and event.created_by.lower() != "admin":
         conn.close()
-        raise HTTPException(status_code=403, detail="Only the event host can update this event")
+        raise HTTPException(status_code=403, detail="Only the event host or admin can update this event")
     
     # Update the event
     if USE_POSTGRES:
