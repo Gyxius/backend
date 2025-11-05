@@ -62,6 +62,9 @@ def normalize_image_url(image_url: str) -> str:
     """Convert relative image URLs to absolute URLs for cross-origin access"""
     if not image_url:
         return ""
+    # Pass through data URLs (base64) or blob URLs untouched
+    if image_url.startswith("data:") or image_url.startswith("blob:"):
+        return image_url
     # If already absolute, return as-is
     if image_url.startswith("http://") or image_url.startswith("https://"):
         return image_url
