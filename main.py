@@ -1175,8 +1175,10 @@ def get_notifications(username: str):
     }
 
 @app.post("/api/notifications/{username}/mark-read")
-def mark_notifications_read(username: str, event_id: Optional[int] = Body(None)):
+def mark_notifications_read(username: str, request: dict = Body(...)):
     """Mark notifications as read for a user. If event_id provided, mark only for that event."""
+    event_id = request.get("event_id", None)
+    
     conn = get_db_connection()
     c = conn.cursor()
     
