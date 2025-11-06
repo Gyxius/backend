@@ -363,11 +363,20 @@ def debug_profiles():
     conn.close()
     result = []
     for row in rows:
-        result.append({
-            "username": row[0],
-            "profile_json_preview": str(row[1])[:200] if row[1] else "NULL",
-            "updated_at": str(row[2]) if len(row) > 2 else "N/A"
-        })
+        if USE_POSTGRES:
+            # RealDictCursor returns dict
+            result.append({
+                "username": row['username'],
+                "profile_json_preview": str(row['profile_json'])[:200] if row['profile_json'] else "NULL",
+                "updated_at": str(row['updated_at'])
+            })
+        else:
+            # SQLite returns tuple
+            result.append({
+                "username": row[0],
+                "profile_json_preview": str(row[1])[:200] if row[1] else "NULL",
+                "updated_at": str(row[2]) if len(row) > 2 else "N/A"
+            })
     return {"profiles": result, "count": len(result)}
 
 @app.get("/users")
@@ -686,7 +695,8 @@ def get_user_profile(username: str):
     if not row:
         raise HTTPException(status_code=404, detail="Profile not found")
     try:
-        raw = row[0] if not USE_POSTGRES else row[0]
+        # RealDictCursor returns dict for Postgres, tuple for SQLite
+        raw = row['profile_json'] if USE_POSTGRES else row[0]
         import json
         result = json.loads(raw) if raw else {}
         print(f"📥 [PROFILE] Returning: {str(result)[:200]}...")
