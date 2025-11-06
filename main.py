@@ -1377,31 +1377,9 @@ def send_chat_message(event_id: int, username: str = Body(...), message: str = B
             """, (event_id, username, message))
             message_id = c.lastrowid
 
-        # Get all participants of the event (including host)
-        execute_query(c, """
-            SELECT username FROM event_participants WHERE event_id = ?
-        """, (event_id,))
-
-        participants = []
-        for row in c.fetchall():
-            participant_name = row["username"] if USE_POSTGRES else row[0]
-            # Don't notify the sender
-            if participant_name != username:
-                participants.append(participant_name)
-
-        # Create notifications for all other participants
-        for participant in participants:
-            try:
-                execute_query(c, """
-                    INSERT INTO notifications (user_id, event_id, message_id, is_read)
-                    VALUES (?, ?, ?, ?)
-                """, (participant, event_id, message_id, False if USE_POSTGRES else 0))
-            except Exception as ne:
-                # Non-fatal: log and continue creating other notifications
-                print(f"⚠️ Failed to create notification for {participant}: {ne}")
-
+        # --- Simplified behavior: only store the chat message to avoid notification-related failures ---
         conn.commit()
-        return {"message": "Message sent", "notifications_created": len(participants)}
+        return {"message": "Message stored", "message_id": message_id}
 
     except Exception as e:
         # Log full traceback for debugging and return JSON (temporary verbose error for debugging)
