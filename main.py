@@ -1356,44 +1356,64 @@ def get_chat_messages(event_id: int):
 @app.post("/api/chat/{event_id}")
 def send_chat_message(event_id: int, username: str = Body(...), message: str = Body(...)):
     """Send a chat message and create notifications for other participants"""
-    conn = get_db_connection()
-    c = conn.cursor()
-    
-    # Insert the message
-    execute_query(c, """
-        INSERT INTO chat_messages (event_id, username, message)
-        VALUES (?, ?, ?)
-    """, (event_id, username, message))
-    
-    # Get the message ID
-    if USE_POSTGRES:
-        execute_query(c, "SELECT lastval()")
-        message_id = c.fetchone()[0]
-    else:
-        message_id = c.lastrowid
-    
-    # Get all participants of the event (including host)
-    execute_query(c, """
-        SELECT username FROM event_participants WHERE event_id = ?
-    """, (event_id,))
-    
-    participants = []
-    for row in c.fetchall():
-        participant_name = row["username"] if USE_POSTGRES else row[0]
-        # Don't notify the sender
-        if participant_name != username:
-            participants.append(participant_name)
-    
-    # Create notifications for all other participants
-    for participant in participants:
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+
+        # Insert the message
         execute_query(c, """
-            INSERT INTO notifications (user_id, event_id, message_id, is_read)
-            VALUES (?, ?, ?, ?)
-        """, (participant, event_id, message_id, False if USE_POSTGRES else 0))
-    
-    conn.commit()
-    conn.close()
-    return {"message": "Message sent", "notifications_created": len(participants)}
+            INSERT INTO chat_messages (event_id, username, message)
+            VALUES (?, ?, ?)
+        """, (event_id, username, message))
+
+        # Get the message ID
+        if USE_POSTGRES:
+            execute_query(c, "SELECT lastval()")
+            message_id = c.fetchone()[0]
+        else:
+            message_id = c.lastrowid
+
+        # Get all participants of the event (including host)
+        execute_query(c, """
+            SELECT username FROM event_participants WHERE event_id = ?
+        """, (event_id,))
+
+        participants = []
+        for row in c.fetchall():
+            participant_name = row["username"] if USE_POSTGRES else row[0]
+            # Don't notify the sender
+            if participant_name != username:
+                participants.append(participant_name)
+
+        # Create notifications for all other participants
+        for participant in participants:
+            try:
+                execute_query(c, """
+                    INSERT INTO notifications (user_id, event_id, message_id, is_read)
+                    VALUES (?, ?, ?, ?)
+                """, (participant, event_id, message_id, False if USE_POSTGRES else 0))
+            except Exception as ne:
+                # Non-fatal: log and continue creating other notifications
+                print(f"⚠️ Failed to create notification for {participant}: {ne}")
+
+        conn.commit()
+        return {"message": "Message sent", "notifications_created": len(participants)}
+
+    except Exception as e:
+        # Log full traceback for debugging and return JSON error so clients don't hit opaque 500s
+        import traceback
+        traceback.print_exc()
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            try:
+                conn.close()
+            except Exception:
+                pass
+        raise HTTPException(status_code=500, detail=f"Internal server error sending chat message: {e}")
 
 @app.get("/api/notifications/{username}")
 def get_notifications(username: str):
