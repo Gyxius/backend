@@ -664,19 +664,24 @@ def get_user_profile(username: str):
     # Fetch profile JSON; ignore case on username
     execute_query(c, "SELECT profile_json FROM user_profiles WHERE lower(username) = lower(?)", (username,))
     row = c.fetchone()
+    print(f"📥 [PROFILE] Fetching profile for {username}: row={row}")
     conn.close()
     if not row:
         raise HTTPException(status_code=404, detail="Profile not found")
     try:
         raw = row[0] if not USE_POSTGRES else row[0]
         import json
-        return json.loads(raw) if raw else {}
-    except Exception:
+        result = json.loads(raw) if raw else {}
+        print(f"📥 [PROFILE] Returning: {str(result)[:200]}...")
+        return result
+    except Exception as e:
+        print(f"❌ [PROFILE] Error parsing: {e}")
         return {}
 
 @app.post("/api/users/{username}/profile")
 def upsert_user_profile(username: str, payload: UserProfilePayload):
     import json
+    print(f"💾 [PROFILE] Saving profile for {username}: {payload.data}")
     conn = get_db_connection()
     c = conn.cursor()
     # Ensure user exists (create stub if not)
@@ -686,6 +691,7 @@ def upsert_user_profile(username: str, payload: UserProfilePayload):
         execute_query(c, "INSERT INTO users (username) VALUES (?)", (username,))
     # Upsert profile JSON
     profile_json = json.dumps(payload.data or {})
+    print(f"💾 [PROFILE] JSON to save: {profile_json[:200]}...")
     if USE_POSTGRES:
         c.execute(
             """
