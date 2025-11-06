@@ -1461,10 +1461,12 @@ async def upload_image(file: UploadFile = File(...)):
         if file.content_type not in allowed_types:
             raise HTTPException(status_code=400, detail="Invalid file type. Only JPEG, PNG, GIF, and WebP are allowed.")
 
-        # If S3 is configured, upload to S3 for persistence; otherwise save to local disk (ephemeral)
+        # If S3/R2 is configured, upload to cloud storage for persistence; otherwise save to local disk (ephemeral)
         s3_bucket = os.environ.get("S3_BUCKET")
-        s3_region = os.environ.get("S3_REGION")
+        s3_region = os.environ.get("S3_REGION", "auto")
         s3_prefix = os.environ.get("S3_PREFIX", "uploads/")
+        s3_endpoint = os.environ.get("S3_ENDPOINT_URL")  # For R2, B2, or other S3-compatible
+        s3_public_url = os.environ.get("S3_PUBLIC_URL")  # Optional: custom public URL base (e.g., R2 custom domain or .r2.dev)
 
         # Build a safe unique key/filename
         original = file.filename or "upload"
@@ -1476,11 +1478,35 @@ async def upload_image(file: UploadFile = File(...)):
             if boto3 is None:
                 raise HTTPException(status_code=500, detail="S3 upload requested but boto3 is not installed.")
             try:
-                s3_client = boto3.client("s3", region_name=s3_region)
-                extra = {"ContentType": file.content_type, "ACL": "public-read"}
-                s3_client.upload_fileobj(file.file, s3_bucket, key, ExtraArgs=extra)
+                # Create S3 client with optional endpoint (for R2, B2, etc.)
+                client_kwargs = {"region_name": s3_region}
+                if s3_endpoint:
+                    client_kwargs["endpoint_url"] = s3_endpoint
+                s3_client = boto3.client("s3", **client_kwargs)
+                
+                # Upload with public-read ACL (skip ACL if unsupported by provider)
+                extra = {"ContentType": file.content_type}
+                try:
+                    extra["ACL"] = "public-read"
+                    s3_client.upload_fileobj(file.file, s3_bucket, key, ExtraArgs=extra)
+                except Exception as acl_err:
+                    # Some providers (R2) don't support ACL; retry without it
+                    print(f"ACL not supported, uploading without ACL: {acl_err}")
+                    del extra["ACL"]
+                    file.file.seek(0)  # Reset file pointer
+                    s3_client.upload_fileobj(file.file, s3_bucket, key, ExtraArgs=extra)
+                
                 # Construct public URL
-                if s3_region:
+                if s3_public_url:
+                    # Use custom public URL base (e.g., https://pub-xxxxx.r2.dev or custom domain)
+                    image_url = f"{s3_public_url.rstrip('/')}/{key}"
+                elif s3_endpoint:
+                    # For R2/B2 with endpoint: construct URL from endpoint + bucket + key
+                    # R2 format: https://<bucket>.<account-id>.r2.cloudflarestorage.com/<key>
+                    # Fallback: endpoint/bucket/key
+                    base = s3_endpoint.rstrip("/")
+                    image_url = f"{base}/{s3_bucket}/{key}"
+                elif s3_region and s3_region != "auto":
                     image_url = f"https://{s3_bucket}.s3.{s3_region}.amazonaws.com/{key}"
                 else:
                     image_url = f"https://{s3_bucket}.s3.amazonaws.com/{key}"
@@ -1488,7 +1514,9 @@ async def upload_image(file: UploadFile = File(...)):
             except HTTPException:
                 raise
             except Exception as s3e:
-                print(f"Error uploading to S3: {s3e}")
+                print(f"Error uploading to S3/R2: {s3e}")
+                import traceback
+                traceback.print_exc()
                 # Fallback to local disk if S3 fails
 
         # Local disk fallback (WARNING: ephemeral on many hosts)
