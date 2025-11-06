@@ -265,6 +265,15 @@ def init_db():
         )
     """)
 
+    # User profiles stored as raw JSON (per username)
+    execute_query(c, f"""
+        CREATE TABLE IF NOT EXISTS user_profiles (
+            username TEXT PRIMARY KEY,
+            profile_json TEXT,
+            updated_at {timestamp_col}
+        )
+    """)
+
     conn.commit()
     
     # Migration: Add is_featured column if it doesn't exist (for existing databases)
@@ -402,6 +411,9 @@ class RegisterRequest(BaseModel):
 class Event(BaseModel):
     name: str
     description: str = ""
+
+class UserProfilePayload(BaseModel):
+    data: dict
 
 @app.post("/login")
 def login(user: LoginRequest):
@@ -643,6 +655,55 @@ def validate_invite(code: str):
         inviter = r[0] if r else None
     conn.close()
     return {"valid": inviter is not None, "inviter": inviter}
+
+# ===== User Profile Endpoints =====
+@app.get("/api/users/{username}/profile")
+def get_user_profile(username: str):
+    conn = get_db_connection()
+    c = conn.cursor()
+    # Fetch profile JSON; ignore case on username
+    execute_query(c, "SELECT profile_json FROM user_profiles WHERE lower(username) = lower(?)", (username,))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    try:
+        raw = row[0] if not USE_POSTGRES else row[0]
+        import json
+        return json.loads(raw) if raw else {}
+    except Exception:
+        return {}
+
+@app.post("/api/users/{username}/profile")
+def upsert_user_profile(username: str, payload: UserProfilePayload):
+    import json
+    conn = get_db_connection()
+    c = conn.cursor()
+    # Ensure user exists (create stub if not)
+    execute_query(c, "SELECT id FROM users WHERE lower(username) = lower(?)", (username,))
+    exists = c.fetchone()
+    if not exists:
+        execute_query(c, "INSERT INTO users (username) VALUES (?)", (username,))
+    # Upsert profile JSON
+    profile_json = json.dumps(payload.data or {})
+    if USE_POSTGRES:
+        c.execute(
+            """
+            INSERT INTO user_profiles (username, profile_json, updated_at)
+            VALUES (%s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (username) DO UPDATE SET profile_json = EXCLUDED.profile_json, updated_at = CURRENT_TIMESTAMP
+            """,
+            (username, profile_json),
+        )
+    else:
+        execute_query(
+            c,
+            "INSERT OR REPLACE INTO user_profiles (username, profile_json, updated_at) VALUES (?, ?, datetime('now'))",
+            (username, profile_json),
+        )
+    conn.commit()
+    conn.close()
+    return {"ok": True}
 
 class FullEvent(BaseModel):
     name: str
