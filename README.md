@@ -29,15 +29,33 @@ Option B — Manual Web Service with Docker
 ## Environment variables
 - `FRONTEND_ORIGINS` — limits CORS to one or more frontend origins (comma-separated). If unset, defaults to `*` (dev).
 
-### Optional: Persistent image storage (S3)
-Event images saved to the container filesystem (`./static/uploads`) are ephemeral on many hosts (e.g., Render) and will disappear on restarts/redeploys. To persist uploads, configure S3:
+### Optional: Persistent image storage (S3/R2/B2)
+Event images saved to the container filesystem (`./static/uploads`) are ephemeral on many hosts (e.g., Render) and will disappear on restarts/redeploys. To persist uploads, configure S3-compatible storage:
 
-- `S3_BUCKET` — your bucket name (enables S3 path)
-- `S3_REGION` — region like `eu-west-1` (optional but recommended)
+#### **Free option: Cloudflare R2** (recommended)
+- 10 GB free, no egress fees
+- Set these env vars on Render:
+  ```
+  S3_BUCKET=your-bucket-name
+  S3_REGION=auto
+  S3_ENDPOINT_URL=https://<account-id>.r2.cloudflarestorage.com
+  S3_PUBLIC_URL=https://pub-xxxxx.r2.dev  (enable R2.dev subdomain in bucket settings)
+  AWS_ACCESS_KEY_ID=<your-r2-access-key>
+  AWS_SECRET_ACCESS_KEY=<your-r2-secret>
+  ```
+- Get credentials from Cloudflare dashboard → R2 → Manage R2 API Tokens
+
+#### AWS S3 (standard)
+- `S3_BUCKET` — your bucket name
+- `S3_REGION` — region like `eu-west-1`
 - `S3_PREFIX` — object key prefix, default `uploads/`
-- AWS credentials — provide via environment (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and optionally `AWS_SESSION_TOKEN`) or an attached role.
+- AWS credentials via `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`
 
-When `S3_BUCKET` is set, `/api/upload-image` uploads directly to S3 with `public-read` ACL and returns a public URL. If S3 is not configured or fails, the server falls back to saving under `./static/uploads` and returns an absolute URL under `/static/uploads/*`.
+#### Backblaze B2 or other S3-compatible
+- Set `S3_ENDPOINT_URL` to provider's endpoint
+- Use provider's access keys for `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`
+
+When `S3_BUCKET` is set, `/api/upload-image` uploads to the configured storage and returns a public URL. If S3/R2 is not configured or fails, the server falls back to `./static/uploads` (ephemeral).
 
 ## Endpoints
 - `POST /register` — username + password (hash stored server-side)
