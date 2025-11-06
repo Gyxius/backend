@@ -11,6 +11,13 @@ import json
 import sqlite3
 import shutil
 from pathlib import Path
+from datetime import datetime
+
+# Optional S3 support for persistent image storage
+try:
+    import boto3  # type: ignore
+except Exception:
+    boto3 = None
 
 app = FastAPI()
 
@@ -1449,29 +1456,49 @@ async def geocode_proxy(q: str, limit: int = 5, countrycodes: str = "fr"):
 async def upload_image(file: UploadFile = File(...)):
     """Upload an image and return the URL"""
     try:
-        # Create uploads directory if it doesn't exist
-        upload_dir = Path("./static/uploads")
-        upload_dir.mkdir(parents=True, exist_ok=True)
-        
         # Validate file type
         allowed_types = ["image/jpeg", "image/png", "image/gif", "image/webp"]
         if file.content_type not in allowed_types:
             raise HTTPException(status_code=400, detail="Invalid file type. Only JPEG, PNG, GIF, and WebP are allowed.")
-        
-        # Generate unique filename
-        file_extension = file.filename.split(".")[-1] if "." in file.filename else "jpg"
-        import time
-        filename = f"{int(time.time())}_{file.filename}"
-        file_path = upload_dir / filename
-        
-        # Save file
+
+        # If S3 is configured, upload to S3 for persistence; otherwise save to local disk (ephemeral)
+        s3_bucket = os.environ.get("S3_BUCKET")
+        s3_region = os.environ.get("S3_REGION")
+        s3_prefix = os.environ.get("S3_PREFIX", "uploads/")
+
+        # Build a safe unique key/filename
+        original = file.filename or "upload"
+        safe_name = original.replace("/", "_").replace("\\", "_")
+        timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%S%f")
+        key = f"{s3_prefix}{timestamp}_{safe_name}"
+
+        if s3_bucket:
+            if boto3 is None:
+                raise HTTPException(status_code=500, detail="S3 upload requested but boto3 is not installed.")
+            try:
+                s3_client = boto3.client("s3", region_name=s3_region)
+                extra = {"ContentType": file.content_type, "ACL": "public-read"}
+                s3_client.upload_fileobj(file.file, s3_bucket, key, ExtraArgs=extra)
+                # Construct public URL
+                if s3_region:
+                    image_url = f"https://{s3_bucket}.s3.{s3_region}.amazonaws.com/{key}"
+                else:
+                    image_url = f"https://{s3_bucket}.s3.amazonaws.com/{key}"
+                return {"url": image_url}
+            except HTTPException:
+                raise
+            except Exception as s3e:
+                print(f"Error uploading to S3: {s3e}")
+                # Fallback to local disk if S3 fails
+
+        # Local disk fallback (WARNING: ephemeral on many hosts)
+        upload_dir = Path("./static/uploads")
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        file_path = upload_dir / key.split("/")[-1]
         with file_path.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-        
-        # Return absolute URL for cross-origin access
-        # Get the backend URL from environment or construct it
         backend_url = os.environ.get("BACKEND_URL", "https://fast-api-backend-qlyb.onrender.com")
-        image_url = f"{backend_url}/static/uploads/{filename}"
+        image_url = f"{backend_url}/static/uploads/{file_path.name}"
         return {"url": image_url}
     except HTTPException:
         raise

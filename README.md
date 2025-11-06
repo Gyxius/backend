@@ -29,6 +29,16 @@ Option B — Manual Web Service with Docker
 ## Environment variables
 - `FRONTEND_ORIGINS` — limits CORS to one or more frontend origins (comma-separated). If unset, defaults to `*` (dev).
 
+### Optional: Persistent image storage (S3)
+Event images saved to the container filesystem (`./static/uploads`) are ephemeral on many hosts (e.g., Render) and will disappear on restarts/redeploys. To persist uploads, configure S3:
+
+- `S3_BUCKET` — your bucket name (enables S3 path)
+- `S3_REGION` — region like `eu-west-1` (optional but recommended)
+- `S3_PREFIX` — object key prefix, default `uploads/`
+- AWS credentials — provide via environment (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and optionally `AWS_SESSION_TOKEN`) or an attached role.
+
+When `S3_BUCKET` is set, `/api/upload-image` uploads directly to S3 with `public-read` ACL and returns a public URL. If S3 is not configured or fails, the server falls back to saving under `./static/uploads` and returns an absolute URL under `/static/uploads/*`.
+
 ## Endpoints
 - `POST /register` — username + password (hash stored server-side)
 - `POST /login` — verifies password (case-insensitive username)
@@ -36,3 +46,4 @@ Option B — Manual Web Service with Docker
 - `POST /join_event`
 - `GET /user_joined_events/{user_id}`
 - `POST /search_requests` / `GET /search_requests`
+- `POST /api/upload-image` — upload an image; with S3 configured returns a public S3 URL; otherwise serves from `/static/uploads/*`.
