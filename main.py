@@ -353,6 +353,23 @@ def debug_env():
         "USE_POSTGRES": USE_POSTGRES,
     }
 
+@app.get("/debug/profiles")
+def debug_profiles():
+    """Debug endpoint to check what's in user_profiles table"""
+    conn = get_db_connection()
+    c = conn.cursor()
+    execute_query(c, "SELECT username, profile_json, updated_at FROM user_profiles LIMIT 10")
+    rows = c.fetchall()
+    conn.close()
+    result = []
+    for row in rows:
+        result.append({
+            "username": row[0],
+            "profile_json_preview": str(row[1])[:200] if row[1] else "NULL",
+            "updated_at": str(row[2]) if len(row) > 2 else "N/A"
+        })
+    return {"profiles": result, "count": len(result)}
+
 @app.get("/users")
 def get_users():
     conn = get_db_connection()
