@@ -1361,17 +1361,20 @@ def send_chat_message(event_id: int, username: str = Body(...), message: str = B
         conn = get_db_connection()
         c = conn.cursor()
 
-        # Insert the message
-        execute_query(c, """
-            INSERT INTO chat_messages (event_id, username, message)
-            VALUES (?, ?, ?)
-        """, (event_id, username, message))
-
-        # Get the message ID
+        # Insert the message. Use RETURNING id on Postgres to reliably get the new id.
         if USE_POSTGRES:
-            execute_query(c, "SELECT lastval()")
-            message_id = c.fetchone()[0]
+            # psycopg2 with RealDictCursor supports RETURNING
+            c.execute(
+                "INSERT INTO chat_messages (event_id, username, message) VALUES (%s, %s, %s) RETURNING id",
+                (event_id, username, message),
+            )
+            row = c.fetchone()
+            message_id = row["id"] if (hasattr(row, "keys") or isinstance(row, dict)) else row[0]
         else:
+            execute_query(c, """
+                INSERT INTO chat_messages (event_id, username, message)
+                VALUES (?, ?, ?)
+            """, (event_id, username, message))
             message_id = c.lastrowid
 
         # Get all participants of the event (including host)
