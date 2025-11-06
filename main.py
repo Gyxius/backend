@@ -1404,9 +1404,10 @@ def send_chat_message(event_id: int, username: str = Body(...), message: str = B
         return {"message": "Message sent", "notifications_created": len(participants)}
 
     except Exception as e:
-        # Log full traceback for debugging and return JSON error so clients don't hit opaque 500s
+        # Log full traceback for debugging and return JSON (temporary verbose error for debugging)
         import traceback
-        traceback.print_exc()
+        tb = traceback.format_exc()
+        print(tb)
         if conn:
             try:
                 conn.rollback()
@@ -1416,7 +1417,10 @@ def send_chat_message(event_id: int, username: str = Body(...), message: str = B
                 conn.close()
             except Exception:
                 pass
-        raise HTTPException(status_code=500, detail=f"Internal server error sending chat message: {e}")
+        # Return the traceback in the response detail (trim to avoid overly large responses)
+        from fastapi.responses import JSONResponse
+        trace_snippet = tb[:4000]
+        return JSONResponse(status_code=500, content={"error": "Internal server error sending chat message", "trace": trace_snippet})
 
 @app.get("/api/notifications/{username}")
 def get_notifications(username: str):
