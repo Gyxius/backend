@@ -1377,9 +1377,68 @@ def send_chat_message(event_id: int, username: str = Body(...), message: str = B
             """, (event_id, username, message))
             message_id = c.lastrowid
 
-        # --- Simplified behavior: only store the chat message to avoid notification-related failures ---
+        # Determine participants (including host) except sender
+        participants = []
+        try:
+            execute_query(c, """
+                SELECT username FROM event_participants
+                WHERE event_id = ? AND username != ?
+            """, (event_id, username))
+            for row in c.fetchall():
+                if USE_POSTGRES:
+                    participants.append(row[0] if not isinstance(row, dict) else row.get("username"))
+                else:
+                    participants.append(row[0])
+        except Exception as pe:
+            print(f"⚠️ Failed fetching participants for notifications: {pe}")
+
+        # Basic mention detection: @Username tokens (alphanumeric + underscore)
+        mentioned_users = set()
+        import re
+        for token in re.findall(r"@([A-Za-z0-9_]+)", message):
+            mentioned_users.add(token)
+
+        # Normalize casing: match stored participant usernames case-insensitively
+        norm_map = {p.lower(): p for p in participants}
+        final_recipients = set(participants)
+
+        # If a mentioned user is not already a participant, we still attempt to notify if user exists in users table
+        # (host might not appear in participants table yet).
+        try:
+            if mentioned_users:
+                execute_query(c, "SELECT username FROM users")
+                existing_users = { (row['username'] if USE_POSTGRES else row[0]).lower(): (row['username'] if USE_POSTGRES else row[0]) for row in c.fetchall() }
+                for m in mentioned_users:
+                    ml = m.lower()
+                    if ml in norm_map:
+                        final_recipients.add(norm_map[ml])
+                    elif ml in existing_users and existing_users[ml] != username:
+                        final_recipients.add(existing_users[ml])
+        except Exception as me:
+            print(f"⚠️ Mention expansion failed: {me}")
+
+        # Insert notifications rows for each recipient (skip sender)
+        notified = 0
+        for recipient in final_recipients:
+            if not recipient or recipient == username:
+                continue
+            try:
+                if USE_POSTGRES:
+                    c.execute(
+                        "INSERT INTO notifications (user_id, event_id, message_id, is_read) VALUES (%s, %s, %s, %s)",
+                        (recipient, event_id, message_id, False),
+                    )
+                else:
+                    execute_query(c,
+                        "INSERT INTO notifications (user_id, event_id, message_id, is_read) VALUES (?, ?, ?, ?)",
+                        (recipient, event_id, message_id, 0)
+                    )
+                notified += 1
+            except Exception as ie:
+                print(f"⚠️ Failed inserting notification for {recipient}: {ie}")
+
         conn.commit()
-        return {"message": "Message stored", "message_id": message_id}
+        return {"message": "Message stored", "message_id": message_id, "notified": notified, "mentions": list(mentioned_users)}
 
     except Exception as e:
         # Log full traceback for debugging and return JSON (temporary verbose error for debugging)
