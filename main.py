@@ -1460,7 +1460,7 @@ def send_chat_message(event_id: int, username: str = Body(...), message: str = B
         return JSONResponse(status_code=500, content={"error": "Internal server error sending chat message", "trace": trace_snippet})
 
 @app.delete("/api/chat/{event_id}/messages/{message_id}")
-def delete_chat_message(event_id: int, message_id: int, username: str = Body(...)):
+def delete_chat_message(event_id: int, message_id: int, username: str):
     """Delete a chat message. Only the event host can delete messages."""
     conn = None
     try:
