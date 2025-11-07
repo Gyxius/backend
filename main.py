@@ -1339,7 +1339,7 @@ def get_chat_messages(event_id: int):
     conn = get_db_connection()
     c = conn.cursor()
     execute_query(c, """
-        SELECT username, message, timestamp
+        SELECT id, username, message, timestamp
         FROM chat_messages
         WHERE event_id = ?
         ORDER BY timestamp ASC
@@ -1347,9 +1347,9 @@ def get_chat_messages(event_id: int):
     messages = []
     for row in c.fetchall():
         if USE_POSTGRES:
-            messages.append({"username": row["username"], "message": row["message"], "timestamp": str(row["timestamp"])})
+            messages.append({"id": row["id"], "username": row["username"], "message": row["message"], "timestamp": str(row["timestamp"])})
         else:
-            messages.append({"username": row[0], "message": row[1], "timestamp": row[2]})
+            messages.append({"id": row[0], "username": row[1], "message": row[2], "timestamp": row[3]})
     conn.close()
     return messages
 
@@ -1458,6 +1458,62 @@ def send_chat_message(event_id: int, username: str = Body(...), message: str = B
         from fastapi.responses import JSONResponse
         trace_snippet = tb[:4000]
         return JSONResponse(status_code=500, content={"error": "Internal server error sending chat message", "trace": trace_snippet})
+
+@app.delete("/api/chat/{event_id}/messages/{message_id}")
+def delete_chat_message(event_id: int, message_id: int, username: str = Body(...)):
+    """Delete a chat message. Only the event host can delete messages."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        
+        # Verify the user is the host of this event
+        execute_query(c, "SELECT host FROM events WHERE id = ?", (event_id,))
+        event_row = c.fetchone()
+        
+        if not event_row:
+            conn.close()
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail="Event not found")
+        
+        event_host = event_row["host"] if USE_POSTGRES else event_row[0]
+        
+        if event_host != username:
+            conn.close()
+            from fastapi import HTTPException
+            raise HTTPException(status_code=403, detail="Only the host can delete messages")
+        
+        # Delete the message
+        execute_query(c, """
+            DELETE FROM chat_messages
+            WHERE id = ? AND event_id = ?
+        """, (message_id, event_id))
+        
+        # Also delete any notifications associated with this message
+        execute_query(c, """
+            DELETE FROM notifications
+            WHERE message_id = ?
+        """, (message_id,))
+        
+        conn.commit()
+        deleted = c.rowcount > 0
+        conn.close()
+        
+        return {"message": "Message deleted successfully" if deleted else "Message not found", "deleted": deleted}
+        
+    except Exception as e:
+        if conn:
+            try:
+                conn.rollback()
+                conn.close()
+            except Exception:
+                pass
+        # Re-raise HTTPException
+        if hasattr(e, 'status_code'):
+            raise e
+        # Other errors
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 @app.get("/api/notifications/{username}")
 def get_notifications(username: str):
