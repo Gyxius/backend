@@ -1483,37 +1483,45 @@ def delete_chat_message(event_id: int, message_id: int, username: str):
             from fastapi import HTTPException
             raise HTTPException(status_code=403, detail="Only the host can delete messages")
         
+        # Delete any notifications associated with this message first
+        try:
+            execute_query(c, """
+                DELETE FROM notifications
+                WHERE message_id = ?
+            """, (message_id,))
+        except Exception as ne:
+            print(f"⚠️ Failed to delete notifications for message {message_id}: {ne}")
+        
         # Delete the message
         execute_query(c, """
             DELETE FROM chat_messages
             WHERE id = ? AND event_id = ?
         """, (message_id, event_id))
         
-        # Also delete any notifications associated with this message
-        execute_query(c, """
-            DELETE FROM notifications
-            WHERE message_id = ?
-        """, (message_id,))
-        
         conn.commit()
-        deleted = c.rowcount > 0
         conn.close()
         
-        return {"message": "Message deleted successfully" if deleted else "Message not found", "deleted": deleted}
+        return {"message": "Message deleted successfully", "deleted": True}
         
     except Exception as e:
         if conn:
             try:
                 conn.rollback()
+            except Exception:
+                pass
+            try:
                 conn.close()
             except Exception:
                 pass
         # Re-raise HTTPException
         if hasattr(e, 'status_code'):
             raise e
-        # Other errors
+        # Other errors - log details
+        import traceback
+        tb = traceback.format_exc()
+        print(f"❌ Error deleting message: {tb}")
         from fastapi.responses import JSONResponse
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return JSONResponse(status_code=500, content={"error": str(e), "detail": "Failed to delete message"})
 
 @app.get("/api/notifications/{username}")
 def get_notifications(username: str):
