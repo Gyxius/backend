@@ -1468,7 +1468,7 @@ def delete_chat_message(event_id: int, message_id: int, username: str):
         c = conn.cursor()
         
         # Verify the user is the host of this event
-        execute_query(c, "SELECT host FROM events WHERE id = ?", (event_id,))
+        execute_query(c, "SELECT created_by FROM events WHERE id = ?", (event_id,))
         event_row = c.fetchone()
         
         if not event_row:
@@ -1476,7 +1476,7 @@ def delete_chat_message(event_id: int, message_id: int, username: str):
             from fastapi import HTTPException
             raise HTTPException(status_code=404, detail="Event not found")
         
-        event_host = event_row["host"] if USE_POSTGRES else event_row[0]
+        event_host = event_row["created_by"] if USE_POSTGRES else event_row[0]
         
         if event_host != username:
             conn.close()
