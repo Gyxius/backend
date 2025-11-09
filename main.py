@@ -70,6 +70,37 @@ async def debug_headers(request: Request):
     print("🔍 [DEBUG] /debug/headers request headers:", hdrs)
     return {"headers": hdrs}
 
+@app.get("/debug/events-schema")
+def debug_events_schema():
+    """Return list of columns in events table (works for Postgres & SQLite)."""
+    conn = get_db_connection()
+    c = conn.cursor()
+    cols = []
+    try:
+        if USE_POSTGRES:
+            c.execute("""
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name='events'
+                ORDER BY ordinal_position
+            """)
+            for row in c.fetchall():
+                nm = row['column_name'] if (hasattr(row, 'keys') or isinstance(row, dict)) else row[0]
+                cols.append(nm)
+        else:
+            c.execute("PRAGMA table_info(events)")
+            for row in c.fetchall():
+                nm = row[1]
+                cols.append(nm)
+    except Exception as e:
+        print(f"⚠️  debug_events_schema error: {e}")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    return {"columns": cols, "has_target_interests": 'target_interests' in cols, "has_target_cite_connection": 'target_cite_connection' in cols, "has_target_reasons": 'target_reasons' in cols}
+
 
 # Database configuration - use PostgreSQL in production, SQLite for local dev
 DATABASE_URL = os.environ.get("DATABASE_URL")
