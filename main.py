@@ -349,6 +349,22 @@ def init_db():
                 else:
                     print("✅ template_event_id column already INTEGER-compatible")
             
+            # Migration: Add targeting columns (target_interests, target_cite_connection, target_reasons)
+            c2.execute("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name='events' AND column_name='target_interests'
+            """)
+            if not c2.fetchone():
+                print("📝 Running migration: Adding targeting columns...")
+                c2.execute("ALTER TABLE events ADD COLUMN target_interests TEXT")
+                c2.execute("ALTER TABLE events ADD COLUMN target_cite_connection TEXT")
+                c2.execute("ALTER TABLE events ADD COLUMN target_reasons TEXT")
+                conn.commit()
+                print("✅ Migration complete: targeting columns added (target_interests, target_cite_connection, target_reasons)")
+            else:
+                print("✅ Targeting columns already exist")
+            
             c2.close()
         except Exception as e:
             print(f"⚠️  Migration check failed: {e}")
