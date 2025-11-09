@@ -780,7 +780,8 @@ def get_all_events():
     query = (
         """
         SELECT id, name, description, location, venue, address, coordinates,
-               date, time, category, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id
+               date, time, category, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id,
+               target_interests, target_cite_connection, target_reasons
         FROM events
         WHERE is_public = 1
         """
@@ -826,6 +827,9 @@ def get_all_events():
                 "createdBy": row["created_by"],
                 "isFeatured": bool(row["is_featured"]),
                 "templateEventId": row["template_event_id"],
+                "targetInterests": json.loads(row["target_interests"]) if row["target_interests"] else [],
+                "targetCiteConnection": json.loads(row["target_cite_connection"]) if row["target_cite_connection"] else [],
+                "targetReasons": json.loads(row["target_reasons"]) if row["target_reasons"] else [],
                 "host": host,
                 "participants": participants,
                 "crew": crew
@@ -850,6 +854,9 @@ def get_all_events():
                 "createdBy": row[15],
                 "isFeatured": bool(row[16]),
                 "templateEventId": row[17],
+                "targetInterests": json.loads(row[18]) if row[18] else [],
+                "targetCiteConnection": json.loads(row[19]) if row[19] else [],
+                "targetReasons": json.loads(row[20]) if row[20] else [],
                 "host": host,
                 "participants": participants,
                 "crew": crew
@@ -866,13 +873,15 @@ def get_event_by_id(event_id: int):
     if USE_POSTGRES:
         cursor.execute("""
             SELECT id, name, description, location, venue, address, coordinates, 
-                   date, time, category, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id
+                   date, time, category, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id,
+                   target_interests, target_cite_connection, target_reasons
             FROM events WHERE id = %s
         """, (event_id,))
     else:
         cursor.execute("""
             SELECT id, name, description, location, venue, address, coordinates, 
-                   date, time, category, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id
+                   date, time, category, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id,
+                   target_interests, target_cite_connection, target_reasons
             FROM events WHERE id = ?
         """, (event_id,))
     
@@ -926,6 +935,9 @@ def get_event_by_id(event_id: int):
             "createdBy": row["created_by"],
             "isFeatured": bool(row["is_featured"]),
             "templateEventId": row["template_event_id"],
+            "targetInterests": json.loads(row["target_interests"]) if row["target_interests"] else [],
+            "targetCiteConnection": json.loads(row["target_cite_connection"]) if row["target_cite_connection"] else [],
+            "targetReasons": json.loads(row["target_reasons"]) if row["target_reasons"] else [],
             "host": host,
             "participants": participants,
             "crew": crew
@@ -950,6 +962,9 @@ def get_event_by_id(event_id: int):
             "createdBy": row[15],
             "isFeatured": bool(row[16]),
             "templateEventId": row[17],
+            "targetInterests": json.loads(row[18]) if row[18] else [],
+            "targetCiteConnection": json.loads(row[19]) if row[19] else [],
+            "targetReasons": json.loads(row[20]) if row[20] else [],
             "host": host,
             "participants": participants,
             "crew": crew
@@ -991,8 +1006,9 @@ def create_full_event(event: FullEvent):
         c.execute(
             """
             INSERT INTO events (name, description, location, venue, address, coordinates,
-                              date, time, category, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                              date, time, category, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id,
+                              target_interests, target_cite_connection, target_reasons)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (
@@ -1013,6 +1029,9 @@ def create_full_event(event: FullEvent):
                 event.created_by,
                 getattr(event, 'is_featured', False),
                 tpl_value,
+                json.dumps(getattr(event, 'target_interests', None)) if getattr(event, 'target_interests', None) else None,
+                json.dumps(getattr(event, 'target_cite_connection', None)) if getattr(event, 'target_cite_connection', None) else None,
+                json.dumps(getattr(event, 'target_reasons', None)) if getattr(event, 'target_reasons', None) else None,
             ),
         )
         row = c.fetchone()
@@ -1020,8 +1039,9 @@ def create_full_event(event: FullEvent):
     else:
         execute_query(c, """
             INSERT INTO events (name, description, location, venue, address, coordinates, 
-                              date, time, category, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                              date, time, category, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id,
+                              target_interests, target_cite_connection, target_reasons)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             event.name,
             event.description,
@@ -1039,7 +1059,10 @@ def create_full_event(event: FullEvent):
             event.image_url,
             event.created_by,
             1 if getattr(event, 'is_featured', False) else 0,
-            getattr(event, 'template_event_id', None)
+            getattr(event, 'template_event_id', None),
+            json.dumps(getattr(event, 'target_interests', None)) if getattr(event, 'target_interests', None) else None,
+            json.dumps(getattr(event, 'target_cite_connection', None)) if getattr(event, 'target_cite_connection', None) else None,
+            json.dumps(getattr(event, 'target_reasons', None)) if getattr(event, 'target_reasons', None) else None,
         ))
         event_id = c.lastrowid
     
@@ -1133,7 +1156,10 @@ def update_event(event_id: int, event: FullEvent):
                 category = %s,
                 languages = %s,
                 capacity = %s,
-                image_url = %s
+                image_url = %s,
+                target_interests = %s,
+                target_cite_connection = %s,
+                target_reasons = %s
             WHERE id = %s
             """,
             (
@@ -1149,6 +1175,9 @@ def update_event(event_id: int, event: FullEvent):
                 json.dumps(event.languages),
                 event.capacity,
                 event.image_url,
+                json.dumps(getattr(event, 'target_interests', None)) if getattr(event, 'target_interests', None) else None,
+                json.dumps(getattr(event, 'target_cite_connection', None)) if getattr(event, 'target_cite_connection', None) else None,
+                json.dumps(getattr(event, 'target_reasons', None)) if getattr(event, 'target_reasons', None) else None,
                 event_id,
             ),
         )
@@ -1166,7 +1195,10 @@ def update_event(event_id: int, event: FullEvent):
                 category = ?,
                 languages = ?,
                 capacity = ?,
-                image_url = ?
+                image_url = ?,
+                target_interests = ?,
+                target_cite_connection = ?,
+                target_reasons = ?
             WHERE id = ?
         """, (
             event.name,
@@ -1181,6 +1213,9 @@ def update_event(event_id: int, event: FullEvent):
             json.dumps(event.languages),
             event.capacity,
             event.image_url,
+            json.dumps(getattr(event, 'target_interests', None)) if getattr(event, 'target_interests', None) else None,
+            json.dumps(getattr(event, 'target_cite_connection', None)) if getattr(event, 'target_cite_connection', None) else None,
+            json.dumps(getattr(event, 'target_reasons', None)) if getattr(event, 'target_reasons', None) else None,
             event_id,
         ))
     
