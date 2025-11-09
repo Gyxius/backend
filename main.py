@@ -371,6 +371,64 @@ def init_db():
             import traceback
             traceback.print_exc()
             conn.rollback()
+
+    # Ensure an Admin user and profile exist (for admin-created events host info)
+    try:
+        c3 = conn.cursor()
+        # Ensure Admin exists in users table
+        if USE_POSTGRES:
+            try:
+                c3.execute("INSERT INTO users (username, password_hash) VALUES (%s, %s) ON CONFLICT (username) DO NOTHING", ("Admin", "SYSTEM_ADMIN_NO_PASSWORD"))
+            except Exception as _e:
+                conn.rollback()
+            else:
+                conn.commit()
+        else:
+            # SQLite: insert if not exists
+            c3.execute("SELECT 1 FROM users WHERE username = ?", ("Admin",))
+            if not c3.fetchone():
+                c3.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)", ("Admin", "SYSTEM_ADMIN_NO_PASSWORD"))
+                conn.commit()
+
+        # Ensure Admin profile exists in user_profiles
+        profile_data = {
+            "name": "Cité Internationale Admin",
+            "age": None,
+            "gender": "System",
+            "nationality": ["International"],
+            "homeCountries": ["International"],
+            "bio": "Official Cité Internationale event organizer and administrator.",
+            "interests": ["Events", "Community", "Culture"],
+            "languages": ["French", "English"],
+            "profile_pic": None,
+            "citeConnection": "staff",
+            "reasonsForStay": ["work"]
+        }
+        profile_json = json.dumps(profile_data)
+
+        if USE_POSTGRES:
+            try:
+                c3.execute("INSERT INTO user_profiles (username, profile_json) VALUES (%s, %s) ON CONFLICT (username) DO NOTHING", ("Admin", profile_json))
+            except Exception as _e:
+                conn.rollback()
+            else:
+                conn.commit()
+        else:
+            c3.execute("SELECT 1 FROM user_profiles WHERE lower(username) = lower(?)", ("Admin",))
+            if not c3.fetchone():
+                c3.execute("INSERT INTO user_profiles (username, profile_json) VALUES (?, ?)", ("Admin", profile_json))
+                conn.commit()
+        try:
+            c3.close()
+        except Exception:
+            pass
+        print("✅ Admin user/profile ensured in database")
+    except Exception as e:
+        print(f"⚠️  Could not ensure Admin profile: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
     
     conn.close()
 
@@ -722,9 +780,47 @@ def get_user_profile(username: str):
     execute_query(c, "SELECT profile_json FROM user_profiles WHERE lower(username) = lower(?)", (username,))
     row = c.fetchone()
     print(f"📥 [PROFILE] Fetching profile for {username}: row={row}")
-    conn.close()
     if not row:
+        # Fallback for Admin: synthesize a default profile and upsert
+        if username.lower() == "admin":
+            try:
+                profile_data = {
+                    "name": "Cité Internationale Admin",
+                    "age": None,
+                    "gender": "System",
+                    "nationality": ["International"],
+                    "homeCountries": ["International"],
+                    "bio": "Official Cité Internationale event organizer and administrator.",
+                    "interests": ["Events", "Community", "Culture"],
+                    "languages": ["French", "English"],
+                    "profile_pic": None,
+                    "citeConnection": "staff",
+                    "reasonsForStay": ["work"]
+                }
+                pj = json.dumps(profile_data)
+                if USE_POSTGRES:
+                    c2 = conn.cursor()
+                    try:
+                        c2.execute("INSERT INTO user_profiles (username, profile_json) VALUES (%s, %s) ON CONFLICT (username) DO NOTHING", ("Admin", pj))
+                        conn.commit()
+                    finally:
+                        try:
+                            c2.close()
+                        except Exception:
+                            pass
+                else:
+                    execute_query(c, "INSERT OR IGNORE INTO user_profiles (username, profile_json) VALUES (?, ?)", ("Admin", pj))
+                    conn.commit()
+                print("📥 [PROFILE] Synthesized Admin profile on the fly")
+                conn.close()
+                return profile_data
+            except Exception as e:
+                print(f"❌ [PROFILE] Failed to synthesize Admin profile: {e}")
+                conn.close()
+                return profile_data
+        conn.close()
         raise HTTPException(status_code=404, detail="Profile not found")
+    conn.close()
     try:
         # RealDictCursor returns dict for Postgres, tuple for SQLite
         raw = row['profile_json'] if USE_POSTGRES else row[0]
