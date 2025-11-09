@@ -883,6 +883,10 @@ class FullEvent(BaseModel):
     created_by: Optional[str] = None
     is_featured: bool = False
     template_event_id: Optional[int] = None
+    # Targeting (admin/user supplied)
+    target_interests: Optional[List[str]] = None
+    target_cite_connection: Optional[List[str]] = None
+    target_reasons: Optional[List[str]] = None
 
 @app.get("/api/events")
 def get_all_events():
