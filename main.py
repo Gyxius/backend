@@ -783,8 +783,7 @@ def get_user_profile(username: str):
     if not row:
         # Fallback for Admin: synthesize a default profile and upsert
         if username.lower() == "admin":
-            try:
-                profile_data = {
+            profile_data = {
                     "name": "Cité Internationale Admin",
                     "age": None,
                     "gender": "System",
@@ -797,6 +796,7 @@ def get_user_profile(username: str):
                     "citeConnection": "staff",
                     "reasonsForStay": ["work"]
                 }
+            try:
                 pj = json.dumps(profile_data)
                 if USE_POSTGRES:
                     c2 = conn.cursor()
