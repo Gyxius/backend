@@ -423,7 +423,7 @@ def init_db():
 
         # Ensure Admin profile exists in user_profiles
         profile_data = {
-            "name": "Cité Internationale Admin",
+            "name": "Admin",
             "age": None,
             "gender": "System",
             "nationality": ["International"],
@@ -815,7 +815,7 @@ def get_user_profile(username: str):
         # Fallback for Admin: synthesize a default profile and upsert
         if username.lower() == "admin":
             profile_data = {
-                    "name": "Cité Internationale Admin",
+                    "name": "Admin",
                     "age": None,
                     "gender": "System",
                     "nationality": ["International"],

@@ -36,7 +36,7 @@ def create_admin_profile():
         
         # Create profile JSON
         profile_data = {
-            "name": "Cité Internationale Admin",
+            "name": "Admin",
             "age": None,
             "gender": "System",
             "nationality": ["International"],
