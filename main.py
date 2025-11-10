@@ -1201,6 +1201,7 @@ def create_full_event(event: FullEvent):
             # If introspection fails, proceed without blocking creation
             pass
     # Basic validation: if both time and end_time are provided, ensure end_time > time (HH:MM)
+    # Allow cross-midnight times (e.g., 22:30 → 02:00 treated as next day)
     def _to_minutes(t: Optional[str]) -> Optional[int]:
         if not t:
             return None
@@ -1212,9 +1213,11 @@ def create_full_event(event: FullEvent):
     if event.time and event.end_time:
         start_m = _to_minutes(event.time)
         end_m = _to_minutes(event.end_time)
-        if start_m is not None and end_m is not None and end_m <= start_m:
+        # If end_m <= start_m, assume it's next day (cross-midnight); no error
+        # Only reject if end_m == start_m (same time)
+        if start_m is not None and end_m is not None and end_m == start_m:
             conn.close()
-            raise HTTPException(status_code=400, detail="endTime must be after start time")
+            raise HTTPException(status_code=400, detail="endTime cannot be the same as start time")
 
     # Insert event and get the new id for both SQLite and PostgreSQL
     if USE_POSTGRES:
@@ -1357,7 +1360,7 @@ def update_event(event_id: int, event: FullEvent):
         conn.close()
         raise HTTPException(status_code=403, detail="Only the event host or admin can update this event")
     
-    # Validate optional end_time ordering
+    # Validate optional end_time ordering (allow cross-midnight times)
     def _to_minutes_u(t: Optional[str]) -> Optional[int]:
         if not t:
             return None
@@ -1369,9 +1372,10 @@ def update_event(event_id: int, event: FullEvent):
     if event.time and event.end_time:
         sm = _to_minutes_u(event.time)
         em = _to_minutes_u(event.end_time)
-        if sm is not None and em is not None and em <= sm:
+        # If end <= start, assume cross-midnight; only reject if exactly equal
+        if sm is not None and em is not None and em == sm:
             conn.close()
-            raise HTTPException(status_code=400, detail="endTime must be after start time")
+            raise HTTPException(status_code=400, detail="endTime cannot be the same as start time")
 
     # Update the event
     if USE_POSTGRES:
