@@ -219,6 +219,7 @@ def init_db():
             coordinates TEXT,
             date TEXT,
             time TEXT,
+            end_time TEXT,
             category TEXT,
             languages TEXT,
             is_public {bool_col},
@@ -395,12 +396,53 @@ def init_db():
                 print("✅ Migration complete: targeting columns added (target_interests, target_cite_connection, target_reasons)")
             else:
                 print("✅ Targeting columns already exist")
+
+            # Migration: Add end_time column
+            c2.execute("""
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name='events' AND column_name='end_time'
+            """)
+            if not c2.fetchone():
+                try:
+                    print("📝 Running migration: Adding end_time column...")
+                    c2.execute("ALTER TABLE events ADD COLUMN end_time TEXT")
+                    conn.commit()
+                    print("✅ Migration complete: end_time column added")
+                except Exception as e_end:
+                    conn.rollback()
+                    print(f"⚠️  Could not add end_time column: {e_end}")
+            else:
+                print("✅ end_time column already exists")
             
             c2.close()
         except Exception as e:
             print(f"⚠️  Migration check failed: {e}")
             import traceback
             traceback.print_exc()
+            conn.rollback()
+
+    # SQLite migrations for extra columns (targeting, end_time)
+    if not USE_POSTGRES:
+        try:
+            c2 = conn.cursor()
+            c2.execute("PRAGMA table_info(events)")
+            existing_cols = [r[1].lower() for r in c2.fetchall()]
+            if "target_interests" not in existing_cols:
+                c2.execute("ALTER TABLE events ADD COLUMN target_interests TEXT")
+            if "target_cite_connection" not in existing_cols:
+                c2.execute("ALTER TABLE events ADD COLUMN target_cite_connection TEXT")
+            if "target_reasons" not in existing_cols:
+                c2.execute("ALTER TABLE events ADD COLUMN target_reasons TEXT")
+            if "end_time" not in existing_cols:
+                c2.execute("ALTER TABLE events ADD COLUMN end_time TEXT")
+            conn.commit()
+            try:
+                c2.close()
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"⚠️  SQLite migration check failed: {e}")
             conn.rollback()
 
     # Ensure an Admin user and profile exist (for admin-created events host info)
@@ -905,6 +947,7 @@ class FullEvent(BaseModel):
     coordinates: Optional[dict] = None
     date: str = ""
     time: str = ""
+    end_time: Optional[str] = None
     category: str = ""
     languages: List[str] = []
     is_public: bool = True
@@ -926,8 +969,8 @@ def get_all_events():
     c = conn.cursor()
     query = (
         """
-        SELECT id, name, description, location, venue, address, coordinates,
-               date, time, category, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id,
+     SELECT id, name, description, location, venue, address, coordinates,
+         date, time, end_time, category, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id,
                target_interests, target_cite_connection, target_reasons
         FROM events
         WHERE is_public = 1
@@ -965,6 +1008,7 @@ def get_all_events():
                 "coordinates": json.loads(row["coordinates"]) if row["coordinates"] else None,
                 "date": row["date"] or "",
                 "time": row["time"] or "",
+                "endTime": row.get("end_time") or "",
                 "category": row["category"] or "",
                 "languages": json.loads(row["languages"]) if row["languages"] else [],
                 "isPublic": bool(row["is_public"]),
@@ -982,6 +1026,11 @@ def get_all_events():
                 "crew": crew
             })
         else:
+            # NOTE: SQLite row indexing must align with SELECT order
+            # SELECT id(0), name(1), description(2), location(3), venue(4), address(5), coordinates(6),
+            #        date(7), time(8), end_time(9), category(10), languages(11), is_public(12), event_type(13),
+            #        capacity(14), image_url(15), created_by(16), is_featured(17), template_event_id(18),
+            #        target_interests(19), target_cite_connection(20), target_reasons(21)
             events.append({
                 "id": event_id,
                 "name": row[1],
@@ -992,18 +1041,19 @@ def get_all_events():
                 "coordinates": json.loads(row[6]) if row[6] else None,
                 "date": row[7] or "",
                 "time": row[8] or "",
-                "category": row[9] or "",
-                "languages": json.loads(row[10]) if row[10] else [],
-                "isPublic": bool(row[11]),
-                "type": row[12] or "custom",
-                "capacity": row[13],
-                "imageUrl": normalize_image_url(row[14] or ""),
-                "createdBy": row[15],
-                "isFeatured": bool(row[16]),
-                "templateEventId": row[17],
-                "targetInterests": json.loads(row[18]) if row[18] else [],
-                "targetCiteConnection": json.loads(row[19]) if row[19] else [],
-                "targetReasons": json.loads(row[20]) if row[20] else [],
+                "endTime": row[9] or "",  # <- previously missing, caused end times to be dropped in list view
+                "category": row[10] or "",
+                "languages": json.loads(row[11]) if row[11] else [],
+                "isPublic": bool(row[12]),
+                "type": row[13] or "custom",
+                "capacity": row[14],
+                "imageUrl": normalize_image_url(row[15] or ""),
+                "createdBy": row[16],
+                "isFeatured": bool(row[17]),
+                "templateEventId": row[18],
+                "targetInterests": json.loads(row[19]) if row[19] else [],
+                "targetCiteConnection": json.loads(row[20]) if row[20] else [],
+                "targetReasons": json.loads(row[21]) if row[21] else [],
                 "host": host,
                 "participants": participants,
                 "crew": crew
@@ -1020,14 +1070,14 @@ def get_event_by_id(event_id: int):
     if USE_POSTGRES:
         cursor.execute("""
             SELECT id, name, description, location, venue, address, coordinates, 
-                   date, time, category, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id,
+                   date, time, end_time, category, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id,
                    target_interests, target_cite_connection, target_reasons
             FROM events WHERE id = %s
         """, (event_id,))
     else:
         cursor.execute("""
             SELECT id, name, description, location, venue, address, coordinates, 
-                   date, time, category, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id,
+                   date, time, end_time, category, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id,
                    target_interests, target_cite_connection, target_reasons
             FROM events WHERE id = ?
         """, (event_id,))
@@ -1073,6 +1123,7 @@ def get_event_by_id(event_id: int):
             "coordinates": json.loads(row["coordinates"]) if row["coordinates"] else None,
             "date": row["date"] or "",
             "time": row["time"] or "",
+            "endTime": row.get("end_time") or "",
             "category": row["category"] or "",
             "languages": json.loads(row["languages"]) if row["languages"] else [],
             "isPublic": bool(row["is_public"]),
@@ -1100,18 +1151,19 @@ def get_event_by_id(event_id: int):
             "coordinates": json.loads(row[6]) if row[6] else None,
             "date": row[7] or "",
             "time": row[8] or "",
-            "category": row[9] or "",
-            "languages": json.loads(row[10]) if row[10] else [],
-            "isPublic": bool(row[11]),
-            "type": row[12] or "custom",
-            "capacity": row[13],
-            "imageUrl": normalize_image_url(row[14] or ""),
-            "createdBy": row[15],
-            "isFeatured": bool(row[16]),
-            "templateEventId": row[17],
-            "targetInterests": json.loads(row[18]) if row[18] else [],
-            "targetCiteConnection": json.loads(row[19]) if row[19] else [],
-            "targetReasons": json.loads(row[20]) if row[20] else [],
+            "endTime": row[9] or "",
+            "category": row[10] or "",
+            "languages": json.loads(row[11]) if row[11] else [],
+            "isPublic": bool(row[12]),
+            "type": row[13] or "custom",
+            "capacity": row[14],
+            "imageUrl": normalize_image_url(row[15] or ""),
+            "createdBy": row[16],
+            "isFeatured": bool(row[17]),
+            "templateEventId": row[18],
+            "targetInterests": json.loads(row[19]) if row[19] else [],
+            "targetCiteConnection": json.loads(row[20]) if row[20] else [],
+            "targetReasons": json.loads(row[21]) if row[21] else [],
             "host": host,
             "participants": participants,
             "crew": crew
@@ -1148,14 +1200,30 @@ def create_full_event(event: FullEvent):
         except Exception as _e:
             # If introspection fails, proceed without blocking creation
             pass
+    # Basic validation: if both time and end_time are provided, ensure end_time > time (HH:MM)
+    def _to_minutes(t: Optional[str]) -> Optional[int]:
+        if not t:
+            return None
+        try:
+            h, m = t.split(":")
+            return int(h) * 60 + int(m)
+        except Exception:
+            return None
+    if event.time and event.end_time:
+        start_m = _to_minutes(event.time)
+        end_m = _to_minutes(event.end_time)
+        if start_m is not None and end_m is not None and end_m <= start_m:
+            conn.close()
+            raise HTTPException(status_code=400, detail="endTime must be after start time")
+
     # Insert event and get the new id for both SQLite and PostgreSQL
     if USE_POSTGRES:
         c.execute(
             """
             INSERT INTO events (name, description, location, venue, address, coordinates,
-                              date, time, category, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id,
+                              date, time, end_time, category, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id,
                               target_interests, target_cite_connection, target_reasons)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (
@@ -1167,6 +1235,7 @@ def create_full_event(event: FullEvent):
                 json.dumps(event.coordinates) if event.coordinates else None,
                 event.date,
                 event.time,
+                event.end_time,
                 event.category,
                 json.dumps(event.languages),
                 True if event.is_public else False,
@@ -1186,9 +1255,9 @@ def create_full_event(event: FullEvent):
     else:
         execute_query(c, """
             INSERT INTO events (name, description, location, venue, address, coordinates, 
-                              date, time, category, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id,
+                              date, time, end_time, category, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id,
                               target_interests, target_cite_connection, target_reasons)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             event.name,
             event.description,
@@ -1198,6 +1267,7 @@ def create_full_event(event: FullEvent):
             json.dumps(event.coordinates) if event.coordinates else None,
             event.date,
             event.time,
+            event.end_time,
             event.category,
             json.dumps(event.languages),
             1 if event.is_public else 0,
@@ -1287,8 +1357,25 @@ def update_event(event_id: int, event: FullEvent):
         conn.close()
         raise HTTPException(status_code=403, detail="Only the event host or admin can update this event")
     
+    # Validate optional end_time ordering
+    def _to_minutes_u(t: Optional[str]) -> Optional[int]:
+        if not t:
+            return None
+        try:
+            h, m = t.split(":")
+            return int(h) * 60 + int(m)
+        except Exception:
+            return None
+    if event.time and event.end_time:
+        sm = _to_minutes_u(event.time)
+        em = _to_minutes_u(event.end_time)
+        if sm is not None and em is not None and em <= sm:
+            conn.close()
+            raise HTTPException(status_code=400, detail="endTime must be after start time")
+
     # Update the event
     if USE_POSTGRES:
+        # Correct parameter ordering (previously end_time was never passed, shifting all fields)
         c.execute(
             """
             UPDATE events SET
@@ -1300,6 +1387,7 @@ def update_event(event_id: int, event: FullEvent):
                 coordinates = %s,
                 date = %s,
                 time = %s,
+                end_time = %s,
                 category = %s,
                 languages = %s,
                 capacity = %s,
@@ -1318,6 +1406,7 @@ def update_event(event_id: int, event: FullEvent):
                 json.dumps(event.coordinates) if event.coordinates else None,
                 event.date,
                 event.time,
+                event.end_time,  # <-- now correctly mapped
                 event.category,
                 json.dumps(event.languages),
                 event.capacity,
@@ -1329,6 +1418,7 @@ def update_event(event_id: int, event: FullEvent):
             ),
         )
     else:
+        # Correct SQLite parameter ordering (previous code misaligned parameters causing bad writes)
         execute_query(c, """
             UPDATE events SET
                 name = ?,
@@ -1339,6 +1429,7 @@ def update_event(event_id: int, event: FullEvent):
                 coordinates = ?,
                 date = ?,
                 time = ?,
+                end_time = ?,
                 category = ?,
                 languages = ?,
                 capacity = ?,
@@ -1356,6 +1447,7 @@ def update_event(event_id: int, event: FullEvent):
             json.dumps(event.coordinates) if event.coordinates else None,
             event.date,
             event.time,
+            event.end_time,
             event.category,
             json.dumps(event.languages),
             event.capacity,
@@ -1408,7 +1500,7 @@ def get_user_events(username: str):
     c = conn.cursor()
     execute_query(c, """
         SELECT DISTINCT e.id, e.name, e.description, e.location, e.venue, e.address, e.coordinates,
-               e.date, e.time, e.category, e.languages, e.is_public, e.event_type, e.capacity, e.image_url, e.created_by, e.is_featured, e.template_event_id
+               e.date, e.time, e.end_time, e.category, e.languages, e.is_public, e.event_type, e.capacity, e.image_url, e.created_by, e.is_featured, e.template_event_id
         FROM events e
         JOIN event_participants ep ON e.id = ep.event_id
         WHERE ep.username = ?
@@ -1441,6 +1533,7 @@ def get_user_events(username: str):
                 "coordinates": json.loads(row["coordinates"]) if row["coordinates"] else None,
                 "date": row["date"] or "",
                 "time": row["time"] or "",
+                "endTime": row.get("end_time") or "",
                 "category": row["category"] or "",
                 "languages": json.loads(row["languages"]) if row["languages"] else [],
                 "isPublic": bool(row["is_public"]),
@@ -1465,15 +1558,16 @@ def get_user_events(username: str):
                 "coordinates": json.loads(row[6]) if row[6] else None,
                 "date": row[7] or "",
                 "time": row[8] or "",
-                "category": row[9] or "",
-                "languages": json.loads(row[10]) if row[10] else [],
-                "isPublic": bool(row[11]),
-                "type": row[12] or "custom",
-                "capacity": row[13],
-                "imageUrl": normalize_image_url(row[14] or ""),
-                "createdBy": row[15],
-                "isFeatured": bool(row[16]),
-                "templateEventId": row[17],
+                "endTime": row[9] or "",
+                "category": row[10] or "",
+                "languages": json.loads(row[11]) if row[11] else [],
+                "isPublic": bool(row[12]),
+                "type": row[13] or "custom",
+                "capacity": row[14],
+                "imageUrl": normalize_image_url(row[15] or ""),
+                "createdBy": row[16],
+                "isFeatured": bool(row[17]),
+                "templateEventId": row[18],
                 "host": host,
                 "participants": participants,
                 "crew": crew
