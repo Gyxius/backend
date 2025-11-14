@@ -228,6 +228,7 @@ def init_db():
             image_url TEXT,
             created_by TEXT,
             is_featured {bool_col} DEFAULT {'FALSE' if USE_POSTGRES else '0'},
+            is_archived {bool_col} DEFAULT {'FALSE' if USE_POSTGRES else '0'},
             template_event_id INTEGER,
             created_at {timestamp_col}
         )
@@ -963,21 +964,58 @@ class FullEvent(BaseModel):
     target_reasons: Optional[List[str]] = None
 
 @app.get("/api/events")
-def get_all_events():
-    """Get all public events with participants"""
+def get_all_events(include_archived: bool = False):
+    """Get all public events with participants. By default excludes archived events."""
     conn = get_db_connection()
     c = conn.cursor()
-    query = (
-        """
+    
+    # First, auto-archive past events
+    from datetime import datetime
+    try:
+        # Get current date and time
+        now = datetime.now()
+        current_date = now.strftime("%Y-%m-%d")
+        current_time = now.strftime("%H:%M")
+        
+        # Archive events that have passed (date < today OR (date = today AND end_time < now))
+        if USE_POSTGRES:
+            execute_query(c, """
+                UPDATE events 
+                SET is_archived = TRUE 
+                WHERE is_archived = FALSE 
+                  AND (
+                    date < %s 
+                    OR (date = %s AND end_time IS NOT NULL AND end_time != '' AND end_time < %s)
+                  )
+            """, (current_date, current_date, current_time))
+        else:
+            execute_query(c, """
+                UPDATE events 
+                SET is_archived = 1 
+                WHERE is_archived = 0 
+                  AND (
+                    date < ? 
+                    OR (date = ? AND end_time IS NOT NULL AND end_time != '' AND end_time < ?)
+                  )
+            """, (current_date, current_date, current_time))
+        conn.commit()
+    except Exception as e:
+        print(f"Auto-archive error: {e}")
+        # Continue even if auto-archive fails
+    
+    # Build query with optional archived filter
+    query = """
      SELECT id, name, description, location, venue, address, coordinates,
-         date, time, end_time, category, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id,
+         date, time, end_time, category, languages, is_public, event_type, capacity, image_url, created_by, is_featured, is_archived, template_event_id,
                target_interests, target_cite_connection, target_reasons
         FROM events
-        WHERE is_public = 1
-        """
-    )
-    if USE_POSTGRES:
-        query = query.replace("is_public = 1", "is_public = TRUE")
+        WHERE is_public = {}
+    """.format("TRUE" if USE_POSTGRES else "1")
+    
+    # Add archived filter unless explicitly requested
+    if not include_archived:
+        query += " AND is_archived = {}".format("FALSE" if USE_POSTGRES else "0")
+    
     execute_query(c, query)
     events = []
     for row in c.fetchall():
@@ -1017,6 +1055,7 @@ def get_all_events():
                 "imageUrl": normalize_image_url(row["image_url"] or ""),
                 "createdBy": row["created_by"],
                 "isFeatured": bool(row["is_featured"]),
+                "isArchived": bool(row["is_archived"]),
                 "templateEventId": row["template_event_id"],
                 "targetInterests": json.loads(row["target_interests"]) if row["target_interests"] else [],
                 "targetCiteConnection": json.loads(row["target_cite_connection"]) if row["target_cite_connection"] else [],
@@ -1029,8 +1068,8 @@ def get_all_events():
             # NOTE: SQLite row indexing must align with SELECT order
             # SELECT id(0), name(1), description(2), location(3), venue(4), address(5), coordinates(6),
             #        date(7), time(8), end_time(9), category(10), languages(11), is_public(12), event_type(13),
-            #        capacity(14), image_url(15), created_by(16), is_featured(17), template_event_id(18),
-            #        target_interests(19), target_cite_connection(20), target_reasons(21)
+            #        capacity(14), image_url(15), created_by(16), is_featured(17), is_archived(18), template_event_id(19),
+            #        target_interests(20), target_cite_connection(21), target_reasons(22)
             events.append({
                 "id": event_id,
                 "name": row[1],
@@ -1041,7 +1080,7 @@ def get_all_events():
                 "coordinates": json.loads(row[6]) if row[6] else None,
                 "date": row[7] or "",
                 "time": row[8] or "",
-                "endTime": row[9] or "",  # <- previously missing, caused end times to be dropped in list view
+                "endTime": row[9] or "",
                 "category": row[10] or "",
                 "languages": json.loads(row[11]) if row[11] else [],
                 "isPublic": bool(row[12]),
@@ -1050,10 +1089,11 @@ def get_all_events():
                 "imageUrl": normalize_image_url(row[15] or ""),
                 "createdBy": row[16],
                 "isFeatured": bool(row[17]),
-                "templateEventId": row[18],
-                "targetInterests": json.loads(row[19]) if row[19] else [],
-                "targetCiteConnection": json.loads(row[20]) if row[20] else [],
-                "targetReasons": json.loads(row[21]) if row[21] else [],
+                "isArchived": bool(row[18]),
+                "templateEventId": row[19],
+                "targetInterests": json.loads(row[20]) if row[20] else [],
+                "targetCiteConnection": json.loads(row[21]) if row[21] else [],
+                "targetReasons": json.loads(row[22]) if row[22] else [],
                 "host": host,
                 "participants": participants,
                 "crew": crew
@@ -1496,6 +1536,66 @@ def delete_event(event_id: int, username: str):
     conn.commit()
     conn.close()
     return {"message": "Event deleted successfully"}
+
+@app.post("/api/events/{event_id}/archive")
+def archive_event(event_id: int, username: str):
+    """Archive an event (host or admin only)"""
+    conn = get_db_connection()
+    c = conn.cursor()
+    
+    # Check if event exists and user is host or admin
+    execute_query(c, "SELECT created_by FROM events WHERE id = ?", (event_id,))
+    result = c.fetchone()
+    
+    if not result:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Event not found")
+    
+    created_by = result["created_by"] if USE_POSTGRES else result[0]
+    
+    if created_by != username and username.lower() != "admin":
+        conn.close()
+        raise HTTPException(status_code=403, detail="Only the host or admin can archive this event")
+    
+    # Archive the event
+    if USE_POSTGRES:
+        execute_query(c, "UPDATE events SET is_archived = TRUE WHERE id = %s", (event_id,))
+    else:
+        execute_query(c, "UPDATE events SET is_archived = 1 WHERE id = ?", (event_id,))
+    
+    conn.commit()
+    conn.close()
+    return {"message": "Event archived successfully"}
+
+@app.post("/api/events/{event_id}/unarchive")
+def unarchive_event(event_id: int, username: str):
+    """Unarchive an event (host or admin only)"""
+    conn = get_db_connection()
+    c = conn.cursor()
+    
+    # Check if event exists and user is host or admin
+    execute_query(c, "SELECT created_by FROM events WHERE id = ?", (event_id,))
+    result = c.fetchone()
+    
+    if not result:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Event not found")
+    
+    created_by = result["created_by"] if USE_POSTGRES else result[0]
+    
+    if created_by != username and username.lower() != "admin":
+        conn.close()
+        raise HTTPException(status_code=403, detail="Only the host or admin can unarchive this event")
+    
+    # Unarchive the event
+    if USE_POSTGRES:
+        execute_query(c, "UPDATE events SET is_archived = FALSE WHERE id = %s", (event_id,))
+    else:
+        execute_query(c, "UPDATE events SET is_archived = 0 WHERE id = ?", (event_id,))
+    
+    conn.commit()
+    conn.close()
+    return {"message": "Event unarchived successfully"}
 
 @app.get("/api/users/{username}/events")
 def get_user_events(username: str):
