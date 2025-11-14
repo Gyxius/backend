@@ -969,52 +969,76 @@ def get_all_events(include_archived: bool = False):
     conn = get_db_connection()
     c = conn.cursor()
     
-    # First, auto-archive past events
-    from datetime import datetime
+    # Check if is_archived column exists
+    has_archived_column = False
     try:
-        # Get current date and time
-        now = datetime.now()
-        current_date = now.strftime("%Y-%m-%d")
-        current_time = now.strftime("%H:%M")
-        
-        # Archive events that have passed (date < today OR (date = today AND end_time < now))
         if USE_POSTGRES:
-            execute_query(c, """
-                UPDATE events 
-                SET is_archived = TRUE 
-                WHERE is_archived = FALSE 
-                  AND (
-                    date < %s 
-                    OR (date = %s AND end_time IS NOT NULL AND end_time != '' AND end_time < %s)
-                  )
-            """, (current_date, current_date, current_time))
+            c.execute("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'events' AND column_name = 'is_archived'
+            """)
+            has_archived_column = c.fetchone() is not None
         else:
-            execute_query(c, """
-                UPDATE events 
-                SET is_archived = 1 
-                WHERE is_archived = 0 
-                  AND (
-                    date < ? 
-                    OR (date = ? AND end_time IS NOT NULL AND end_time != '' AND end_time < ?)
-                  )
-            """, (current_date, current_date, current_time))
-        conn.commit()
+            c.execute("PRAGMA table_info(events)")
+            columns = [row[1] for row in c.fetchall()]
+            has_archived_column = 'is_archived' in columns
     except Exception as e:
-        print(f"Auto-archive error: {e}")
-        # Continue even if auto-archive fails
+        print(f"Error checking for is_archived column: {e}")
     
-    # Build query with optional archived filter
-    query = """
-     SELECT id, name, description, location, venue, address, coordinates,
-         date, time, end_time, category, languages, is_public, event_type, capacity, image_url, created_by, is_featured, is_archived, template_event_id,
-               target_interests, target_cite_connection, target_reasons
-        FROM events
-        WHERE is_public = {}
-    """.format("TRUE" if USE_POSTGRES else "1")
+    # Auto-archive past events if column exists
+    if has_archived_column:
+        from datetime import datetime
+        try:
+            now = datetime.now()
+            current_date = now.strftime("%Y-%m-%d")
+            current_time = now.strftime("%H:%M")
+            
+            if USE_POSTGRES:
+                execute_query(c, """
+                    UPDATE events 
+                    SET is_archived = TRUE 
+                    WHERE is_archived = FALSE 
+                      AND (
+                        date < %s 
+                        OR (date = %s AND end_time IS NOT NULL AND end_time != '' AND end_time < %s)
+                      )
+                """, (current_date, current_date, current_time))
+            else:
+                execute_query(c, """
+                    UPDATE events 
+                    SET is_archived = 1 
+                    WHERE is_archived = 0 
+                      AND (
+                        date < ? 
+                        OR (date = ? AND end_time IS NOT NULL AND end_time != '' AND end_time < ?)
+                      )
+                """, (current_date, current_date, current_time))
+            conn.commit()
+        except Exception as e:
+            print(f"Auto-archive error: {e}")
     
-    # Add archived filter unless explicitly requested
-    if not include_archived:
-        query += " AND is_archived = {}".format("FALSE" if USE_POSTGRES else "0")
+    # Build query based on whether is_archived column exists
+    if has_archived_column:
+        query = """
+         SELECT id, name, description, location, venue, address, coordinates,
+             date, time, end_time, category, languages, is_public, event_type, capacity, image_url, created_by, is_featured, is_archived, template_event_id,
+                   target_interests, target_cite_connection, target_reasons
+            FROM events
+            WHERE is_public = {}
+        """.format("TRUE" if USE_POSTGRES else "1")
+        
+        if not include_archived:
+            query += " AND is_archived = {}".format("FALSE" if USE_POSTGRES else "0")
+    else:
+        # Fallback to old query without is_archived
+        query = """
+         SELECT id, name, description, location, venue, address, coordinates,
+             date, time, end_time, category, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id,
+                   target_interests, target_cite_connection, target_reasons
+            FROM events
+            WHERE is_public = {}
+        """.format("TRUE" if USE_POSTGRES else "1")
     
     execute_query(c, query)
     events = []
@@ -1055,7 +1079,7 @@ def get_all_events(include_archived: bool = False):
                 "imageUrl": normalize_image_url(row["image_url"] or ""),
                 "createdBy": row["created_by"],
                 "isFeatured": bool(row["is_featured"]),
-                "isArchived": bool(row["is_archived"]),
+                "isArchived": bool(row.get("is_archived", False)) if has_archived_column else False,
                 "templateEventId": row["template_event_id"],
                 "targetInterests": json.loads(row["target_interests"]) if row["target_interests"] else [],
                 "targetCiteConnection": json.loads(row["target_cite_connection"]) if row["target_cite_connection"] else [],
@@ -1066,38 +1090,70 @@ def get_all_events(include_archived: bool = False):
             })
         else:
             # NOTE: SQLite row indexing must align with SELECT order
-            # SELECT id(0), name(1), description(2), location(3), venue(4), address(5), coordinates(6),
+            # With is_archived: id(0), name(1), description(2), location(3), venue(4), address(5), coordinates(6),
             #        date(7), time(8), end_time(9), category(10), languages(11), is_public(12), event_type(13),
             #        capacity(14), image_url(15), created_by(16), is_featured(17), is_archived(18), template_event_id(19),
             #        target_interests(20), target_cite_connection(21), target_reasons(22)
-            events.append({
-                "id": event_id,
-                "name": row[1],
-                "description": row[2] or "",
-                "location": row[3] or "",
-                "venue": row[4] or "",
-                "address": row[5] or "",
-                "coordinates": json.loads(row[6]) if row[6] else None,
-                "date": row[7] or "",
-                "time": row[8] or "",
-                "endTime": row[9] or "",
-                "category": row[10] or "",
-                "languages": json.loads(row[11]) if row[11] else [],
-                "isPublic": bool(row[12]),
-                "type": row[13] or "custom",
-                "capacity": row[14],
-                "imageUrl": normalize_image_url(row[15] or ""),
-                "createdBy": row[16],
-                "isFeatured": bool(row[17]),
-                "isArchived": bool(row[18]),
-                "templateEventId": row[19],
-                "targetInterests": json.loads(row[20]) if row[20] else [],
-                "targetCiteConnection": json.loads(row[21]) if row[21] else [],
-                "targetReasons": json.loads(row[22]) if row[22] else [],
-                "host": host,
-                "participants": participants,
-                "crew": crew
-            })
+            # Without is_archived: template_event_id is at (18), target_interests at (19), etc.
+            if has_archived_column:
+                events.append({
+                    "id": event_id,
+                    "name": row[1],
+                    "description": row[2] or "",
+                    "location": row[3] or "",
+                    "venue": row[4] or "",
+                    "address": row[5] or "",
+                    "coordinates": json.loads(row[6]) if row[6] else None,
+                    "date": row[7] or "",
+                    "time": row[8] or "",
+                    "endTime": row[9] or "",
+                    "category": row[10] or "",
+                    "languages": json.loads(row[11]) if row[11] else [],
+                    "isPublic": bool(row[12]),
+                    "type": row[13] or "custom",
+                    "capacity": row[14],
+                    "imageUrl": normalize_image_url(row[15] or ""),
+                    "createdBy": row[16],
+                    "isFeatured": bool(row[17]),
+                    "isArchived": bool(row[18]),
+                    "templateEventId": row[19],
+                    "targetInterests": json.loads(row[20]) if row[20] else [],
+                    "targetCiteConnection": json.loads(row[21]) if row[21] else [],
+                    "targetReasons": json.loads(row[22]) if row[22] else [],
+                    "host": host,
+                    "participants": participants,
+                    "crew": crew
+                })
+            else:
+                # Without is_archived column - old schema
+                events.append({
+                    "id": event_id,
+                    "name": row[1],
+                    "description": row[2] or "",
+                    "location": row[3] or "",
+                    "venue": row[4] or "",
+                    "address": row[5] or "",
+                    "coordinates": json.loads(row[6]) if row[6] else None,
+                    "date": row[7] or "",
+                    "time": row[8] or "",
+                    "endTime": row[9] or "",
+                    "category": row[10] or "",
+                    "languages": json.loads(row[11]) if row[11] else [],
+                    "isPublic": bool(row[12]),
+                    "type": row[13] or "custom",
+                    "capacity": row[14],
+                    "imageUrl": normalize_image_url(row[15] or ""),
+                    "createdBy": row[16],
+                    "isFeatured": bool(row[17]),
+                    "isArchived": False,  # Default to not archived
+                    "templateEventId": row[18],
+                    "targetInterests": json.loads(row[19]) if row[19] else [],
+                    "targetCiteConnection": json.loads(row[20]) if row[20] else [],
+                    "targetReasons": json.loads(row[21]) if row[21] else [],
+                    "host": host,
+                    "participants": participants,
+                    "crew": crew
+                })
     conn.close()
     return events
 
@@ -1543,6 +1599,27 @@ def archive_event(event_id: int, username: str):
     conn = get_db_connection()
     c = conn.cursor()
     
+    # Check if is_archived column exists
+    has_archived_column = False
+    try:
+        if USE_POSTGRES:
+            c.execute("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'events' AND column_name = 'is_archived'
+            """)
+            has_archived_column = c.fetchone() is not None
+        else:
+            c.execute("PRAGMA table_info(events)")
+            columns = [row[1] for row in c.fetchall()]
+            has_archived_column = 'is_archived' in columns
+    except Exception as e:
+        print(f"Error checking for is_archived column: {e}")
+    
+    if not has_archived_column:
+        conn.close()
+        raise HTTPException(status_code=501, detail="Archive feature not available. Database migration required.")
+    
     # Check if event exists and user is host or admin
     execute_query(c, "SELECT created_by FROM events WHERE id = ?", (event_id,))
     result = c.fetchone()
@@ -1558,20 +1635,45 @@ def archive_event(event_id: int, username: str):
         raise HTTPException(status_code=403, detail="Only the host or admin can archive this event")
     
     # Archive the event
-    if USE_POSTGRES:
-        execute_query(c, "UPDATE events SET is_archived = TRUE WHERE id = %s", (event_id,))
-    else:
-        execute_query(c, "UPDATE events SET is_archived = 1 WHERE id = ?", (event_id,))
-    
-    conn.commit()
-    conn.close()
-    return {"message": "Event archived successfully"}
+    try:
+        if USE_POSTGRES:
+            execute_query(c, "UPDATE events SET is_archived = TRUE WHERE id = %s", (event_id,))
+        else:
+            execute_query(c, "UPDATE events SET is_archived = 1 WHERE id = ?", (event_id,))
+        
+        conn.commit()
+        conn.close()
+        return {"message": "Event archived successfully"}
+    except Exception as e:
+        conn.close()
+        raise HTTPException(status_code=500, detail=f"Failed to archive event: {str(e)}")
 
 @app.post("/api/events/{event_id}/unarchive")
 def unarchive_event(event_id: int, username: str):
     """Unarchive an event (host or admin only)"""
     conn = get_db_connection()
     c = conn.cursor()
+    
+    # Check if is_archived column exists
+    has_archived_column = False
+    try:
+        if USE_POSTGRES:
+            c.execute("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'events' AND column_name = 'is_archived'
+            """)
+            has_archived_column = c.fetchone() is not None
+        else:
+            c.execute("PRAGMA table_info(events)")
+            columns = [row[1] for row in c.fetchall()]
+            has_archived_column = 'is_archived' in columns
+    except Exception as e:
+        print(f"Error checking for is_archived column: {e}")
+    
+    if not has_archived_column:
+        conn.close()
+        raise HTTPException(status_code=501, detail="Archive feature not available. Database migration required.")
     
     # Check if event exists and user is host or admin
     execute_query(c, "SELECT created_by FROM events WHERE id = ?", (event_id,))
@@ -1588,14 +1690,18 @@ def unarchive_event(event_id: int, username: str):
         raise HTTPException(status_code=403, detail="Only the host or admin can unarchive this event")
     
     # Unarchive the event
-    if USE_POSTGRES:
-        execute_query(c, "UPDATE events SET is_archived = FALSE WHERE id = %s", (event_id,))
-    else:
-        execute_query(c, "UPDATE events SET is_archived = 0 WHERE id = ?", (event_id,))
-    
-    conn.commit()
-    conn.close()
-    return {"message": "Event unarchived successfully"}
+    try:
+        if USE_POSTGRES:
+            execute_query(c, "UPDATE events SET is_archived = FALSE WHERE id = %s", (event_id,))
+        else:
+            execute_query(c, "UPDATE events SET is_archived = 0 WHERE id = ?", (event_id,))
+        
+        conn.commit()
+        conn.close()
+        return {"message": "Event unarchived successfully"}
+    except Exception as e:
+        conn.close()
+        raise HTTPException(status_code=500, detail=f"Failed to unarchive event: {str(e)}")
 
 @app.get("/api/users/{username}/events")
 def get_user_events(username: str):
