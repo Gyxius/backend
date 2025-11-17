@@ -1708,13 +1708,43 @@ def get_user_events(username: str):
     """Get all events a user has joined or is hosting"""
     conn = get_db_connection()
     c = conn.cursor()
-    execute_query(c, """
-        SELECT DISTINCT e.id, e.name, e.description, e.location, e.venue, e.address, e.coordinates,
-               e.date, e.time, e.end_time, e.category, e.languages, e.is_public, e.event_type, e.capacity, e.image_url, e.created_by, e.is_featured, e.template_event_id
-        FROM events e
-        JOIN event_participants ep ON e.id = ep.event_id
-        WHERE ep.username = ?
-    """, (username,))
+    
+    # Check if is_archived column exists
+    has_archived_column = False
+    try:
+        if USE_POSTGRES:
+            c.execute("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'events' AND column_name = 'is_archived'
+            """)
+            has_archived_column = c.fetchone() is not None
+        else:
+            c.execute("PRAGMA table_info(events)")
+            columns = [row[1] for row in c.fetchall()]
+            has_archived_column = 'is_archived' in columns
+    except Exception as e:
+        print(f"Error checking for is_archived column: {e}")
+    
+    # Build query with or without is_archived
+    if has_archived_column:
+        query = """
+            SELECT DISTINCT e.id, e.name, e.description, e.location, e.venue, e.address, e.coordinates,
+                   e.date, e.time, e.end_time, e.category, e.languages, e.is_public, e.event_type, e.capacity, e.image_url, e.created_by, e.is_featured, e.template_event_id, e.is_archived
+            FROM events e
+            JOIN event_participants ep ON e.id = ep.event_id
+            WHERE ep.username = ?
+        """
+    else:
+        query = """
+            SELECT DISTINCT e.id, e.name, e.description, e.location, e.venue, e.address, e.coordinates,
+                   e.date, e.time, e.end_time, e.category, e.languages, e.is_public, e.event_type, e.capacity, e.image_url, e.created_by, e.is_featured, e.template_event_id
+            FROM events e
+            JOIN event_participants ep ON e.id = ep.event_id
+            WHERE ep.username = ?
+        """
+    
+    execute_query(c, query, (username,))
     events = []
     for row in c.fetchall():
         event_id = row["id"] if USE_POSTGRES else row[0]
@@ -1733,7 +1763,7 @@ def get_user_events(username: str):
                 crew.append(uname)
 
         if USE_POSTGRES:
-            events.append({
+            event_dict = {
                 "id": event_id,
                 "name": row["name"],
                 "description": row["description"] or "",
@@ -1756,9 +1786,12 @@ def get_user_events(username: str):
                 "host": host,
                 "participants": participants,
                 "crew": crew
-            })
+            }
+            if has_archived_column:
+                event_dict["isArchived"] = bool(row["is_archived"])
+            events.append(event_dict)
         else:
-            events.append({
+            event_dict = {
                 "id": event_id,
                 "name": row[1],
                 "description": row[2] or "",
@@ -1781,7 +1814,10 @@ def get_user_events(username: str):
                 "host": host,
                 "participants": participants,
                 "crew": crew
-            })
+            }
+            if has_archived_column:
+                event_dict["isArchived"] = bool(row[19])
+            events.append(event_dict)
     conn.close()
     return events
 
