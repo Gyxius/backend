@@ -56,6 +56,58 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Run database migration on startup
+def run_startup_migrations():
+    """Run database migrations on startup"""
+    DATABASE_URL = os.environ.get("DATABASE_URL")
+    USE_POSTGRES = DATABASE_URL is not None
+    
+    try:
+        if USE_POSTGRES:
+            import psycopg2
+            from psycopg2.extras import RealDictCursor
+            db_url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+            conn = psycopg2.connect(db_url, cursor_factory=RealDictCursor)
+        else:
+            conn = sqlite3.connect("./social.db")
+        
+        c = conn.cursor()
+        
+        # Check if is_archived column exists
+        if USE_POSTGRES:
+            c.execute("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'events' AND column_name = 'is_archived'
+            """)
+            existing = c.fetchone()
+            if existing:
+                print("✅ is_archived column already exists")
+                conn.close()
+                return
+            
+            # Add the column
+            c.execute("ALTER TABLE events ADD COLUMN is_archived BOOLEAN DEFAULT FALSE")
+        else:
+            c.execute("PRAGMA table_info(events)")
+            columns = [row[1] for row in c.fetchall()]
+            if 'is_archived' in columns:
+                print("✅ is_archived column already exists")
+                conn.close()
+                return
+            
+            # Add the column
+            c.execute("ALTER TABLE events ADD COLUMN is_archived INTEGER DEFAULT 0")
+        
+        conn.commit()
+        print("✅ Successfully added is_archived column to events table")
+        conn.close()
+        
+    except Exception as e:
+        print(f"⚠️  Migration warning: {e}")
+
+# Run migrations on startup
+run_startup_migrations()
 
 @app.get("/debug/headers")
 async def debug_headers(request: Request):
