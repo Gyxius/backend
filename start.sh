@@ -7,3 +7,4 @@ python migrate_add_is_archived.py || echo "⚠️  Migration failed or already a
 
 echo "🌟 Starting FastAPI server..."
 exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}
+# Force rebuild
