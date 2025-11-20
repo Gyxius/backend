@@ -1875,17 +1875,23 @@ def get_user_events(username: str):
 
 @app.get("/api/follows/{username}")
 def get_follows(username: str):
-    """Get user's follows list"""
+    """Get user's follows list (who the user follows)"""
     conn = get_db_connection()
     c = conn.cursor()
-    execute_query(c, """
-        SELECT user2 FROM follows WHERE user1 = ?
-        UNION
-        SELECT user1 FROM follows WHERE user2 = ?
-    """, (username, username))
+    execute_query(c, "SELECT user2 FROM follows WHERE user1 = ?", (username,))
     follows = [row[0] for row in c.fetchall()]
     conn.close()
     return follows
+
+@app.get("/api/followers/{username}")
+def get_followers(username: str):
+    """Get user's followers list (who follows the user)"""
+    conn = get_db_connection()
+    c = conn.cursor()
+    execute_query(c, "SELECT user1 FROM follows WHERE user2 = ?", (username,))
+    followers = [row[0] for row in c.fetchall()]
+    conn.close()
+    return followers
 
 @app.post("/api/follows")
 def add_follow(user1: str = Body(...), user2: str = Body(...)):
