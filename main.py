@@ -1041,8 +1041,11 @@ def get_all_events(include_archived: bool = False):
     # Auto-archive past events if column exists
     if has_archived_column:
         from datetime import datetime
+        from zoneinfo import ZoneInfo
         try:
-            now = datetime.now()
+            # Use Paris timezone (Europe/Paris) for event archiving
+            paris_tz = ZoneInfo("Europe/Paris")
+            now = datetime.now(paris_tz)
             current_date = now.strftime("%Y-%m-%d")
             current_time = now.strftime("%H:%M")
             
