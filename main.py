@@ -1040,7 +1040,7 @@ def get_all_events(include_archived: bool = False):
     
     # Auto-archive past events if column exists
     if has_archived_column:
-        from datetime import datetime
+        from datetime import datetime, timedelta
         from zoneinfo import ZoneInfo
         try:
             # Use Paris timezone (Europe/Paris) for event archiving
@@ -1048,6 +1048,7 @@ def get_all_events(include_archived: bool = False):
             now = datetime.now(paris_tz)
             current_date = now.strftime("%Y-%m-%d")
             current_time = now.strftime("%H:%M")
+            yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
             
             if USE_POSTGRES:
                 execute_query(c, """
@@ -1055,20 +1056,60 @@ def get_all_events(include_archived: bool = False):
                     SET is_archived = TRUE 
                     WHERE is_archived = FALSE 
                       AND (
-                        date < %s 
-                        OR (date = %s AND end_time IS NOT NULL AND end_time != '' AND end_time < %s)
+                        -- Case 1: Events from 2+ days ago (definitely past)
+                        date < %s
+                        -- Case 2: Events from yesterday that are cross-midnight and ended this morning
+                        OR (
+                          date = %s
+                          AND end_time IS NOT NULL 
+                          AND end_time != '' 
+                          AND time IS NOT NULL 
+                          AND time != ''
+                          AND end_time < time  -- Cross-midnight indicator
+                          AND %s >= end_time   -- Current time is past the end time (we're on next day now)
+                        )
+                        -- Case 3: Events today that are same-day and have ended
+                        OR (
+                          date = %s 
+                          AND end_time IS NOT NULL 
+                          AND end_time != '' 
+                          AND time IS NOT NULL 
+                          AND time != ''
+                          AND end_time >= time  -- Same-day event indicator
+                          AND %s >= end_time    -- Current time is past the end time
+                        )
                       )
-                """, (current_date, current_date, current_time))
+                """, (yesterday, yesterday, current_time, current_date, current_time))
             else:
                 execute_query(c, """
                     UPDATE events 
                     SET is_archived = 1 
                     WHERE is_archived = 0 
                       AND (
-                        date < ? 
-                        OR (date = ? AND end_time IS NOT NULL AND end_time != '' AND end_time < ?)
+                        -- Case 1: Events from 2+ days ago (definitely past)
+                        date < ?
+                        -- Case 2: Events from yesterday that are cross-midnight and ended this morning
+                        OR (
+                          date = ?
+                          AND end_time IS NOT NULL 
+                          AND end_time != '' 
+                          AND time IS NOT NULL 
+                          AND time != ''
+                          AND end_time < time  -- Cross-midnight indicator
+                          AND ? >= end_time    -- Current time is past the end time (we're on next day now)
+                        )
+                        -- Case 3: Events today that are same-day and have ended
+                        OR (
+                          date = ? 
+                          AND end_time IS NOT NULL 
+                          AND end_time != '' 
+                          AND time IS NOT NULL 
+                          AND time != ''
+                          AND end_time >= time  -- Same-day event indicator
+                          AND ? >= end_time    -- Current time is past the end time
+                        )
                       )
-                """, (current_date, current_date, current_time))
+                """, (yesterday, yesterday, current_time, current_date, current_time))
             conn.commit()
         except Exception as e:
             print(f"Auto-archive error: {e}")
