@@ -35,15 +35,23 @@ except Exception as e:
 
 def _get_allowed_origins():
     """Return CORS allowed origins list from env FRONTEND_ORIGINS/FRONTEND_ORIGIN.
-    Defaults to ["*"] for dev.
+    Defaults to common development/production origins.
     """
     origins = os.environ.get("FRONTEND_ORIGINS") or os.environ.get("FRONTEND_ORIGIN")
     if origins:
         origins_list = [o.strip() for o in origins.split(",") if o.strip()]
         print(f"🔒 CORS: Allowing origins: {origins_list}")
         return origins_list
-    print("⚠️  CORS: No FRONTEND_ORIGINS set, allowing all origins (*)")
-    return ["*"]
+    
+    # Default to common origins if not set
+    default_origins = [
+        "http://localhost:3000",
+        "http://localhost:3001", 
+        "https://joinlemi.netlify.app",
+        "https://*.netlify.app"  # Allow all Netlify preview deploys
+    ]
+    print(f"⚠️  CORS: No FRONTEND_ORIGINS set, using defaults: {default_origins}")
+    return default_origins
 
 allowed_origins = _get_allowed_origins()
 print(f"🌐 Starting with CORS origins: {allowed_origins}")
