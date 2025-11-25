@@ -1010,6 +1010,7 @@ class FullEvent(BaseModel):
     time: str = ""
     end_time: Optional[str] = None
     category: str = ""
+    subcategory: str = ""
     languages: List[str] = []
     is_public: bool = True
     event_type: str = "custom"
@@ -1126,7 +1127,7 @@ def get_all_events(include_archived: bool = False):
     if has_archived_column:
         query = """
          SELECT id, name, description, location, venue, address, coordinates,
-             date, time, end_time, category, languages, is_public, event_type, capacity, image_url, created_by, is_featured, is_archived, template_event_id,
+             date, time, end_time, category, subcategory, languages, is_public, event_type, capacity, image_url, created_by, is_featured, is_archived, template_event_id,
                    target_interests, target_cite_connection, target_reasons
             FROM events
             WHERE is_public = {}
@@ -1138,7 +1139,7 @@ def get_all_events(include_archived: bool = False):
         # Fallback to old query without is_archived
         query = """
          SELECT id, name, description, location, venue, address, coordinates,
-             date, time, end_time, category, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id,
+             date, time, end_time, category, subcategory, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id,
                    target_interests, target_cite_connection, target_reasons
             FROM events
             WHERE is_public = {}
@@ -1176,6 +1177,7 @@ def get_all_events(include_archived: bool = False):
                 "time": row["time"] or "",
                 "endTime": row.get("end_time") or "",
                 "category": row["category"] or "",
+                "subcategory": row.get("subcategory") or "",
                 "languages": json.loads(row["languages"]) if row["languages"] else [],
                 "isPublic": bool(row["is_public"]),
                 "type": row["event_type"] or "custom",
@@ -1424,9 +1426,9 @@ def create_full_event(event: FullEvent):
         c.execute(
             """
             INSERT INTO events (name, description, location, venue, address, coordinates,
-                              date, time, end_time, category, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id,
+                              date, time, end_time, category, subcategory, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id,
                               target_interests, target_cite_connection, target_reasons)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (
@@ -1440,6 +1442,7 @@ def create_full_event(event: FullEvent):
                 event.time,
                 event.end_time,
                 event.category,
+                event.subcategory,
                 json.dumps(event.languages),
                 True if event.is_public else False,
                 event.event_type,
@@ -1458,9 +1461,9 @@ def create_full_event(event: FullEvent):
     else:
         execute_query(c, """
             INSERT INTO events (name, description, location, venue, address, coordinates, 
-                              date, time, end_time, category, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id,
+                              date, time, end_time, category, subcategory, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id,
                               target_interests, target_cite_connection, target_reasons)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             event.name,
             event.description,
@@ -1472,6 +1475,7 @@ def create_full_event(event: FullEvent):
             event.time,
             event.end_time,
             event.category,
+            event.subcategory,
             json.dumps(event.languages),
             1 if event.is_public else 0,
             event.event_type,
@@ -1593,6 +1597,7 @@ def update_event(event_id: int, event: FullEvent):
                 time = %s,
                 end_time = %s,
                 category = %s,
+                subcategory = %s,
                 languages = %s,
                 capacity = %s,
                 image_url = %s,
@@ -1612,6 +1617,7 @@ def update_event(event_id: int, event: FullEvent):
                 event.time,
                 event.end_time,  # <-- now correctly mapped
                 event.category,
+                getattr(event, 'subcategory', ''),
                 json.dumps(event.languages),
                 event.capacity,
                 event.image_url,
@@ -1635,6 +1641,7 @@ def update_event(event_id: int, event: FullEvent):
                 time = ?,
                 end_time = ?,
                 category = ?,
+                subcategory = ?,
                 languages = ?,
                 capacity = ?,
                 image_url = ?,
@@ -1653,6 +1660,7 @@ def update_event(event_id: int, event: FullEvent):
             event.time,
             event.end_time,
             event.category,
+            getattr(event, 'subcategory', ''),
             json.dumps(event.languages),
             event.capacity,
             event.image_url,
