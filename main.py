@@ -1030,8 +1030,9 @@ def get_all_events(include_archived: bool = False):
     conn = get_db_connection()
     c = conn.cursor()
     
-    # Check if is_archived column exists
+    # Check if is_archived and subcategory columns exist
     has_archived_column = False
+    has_subcategory_column = False
     try:
         if USE_POSTGRES:
             c.execute("""
@@ -1040,12 +1041,20 @@ def get_all_events(include_archived: bool = False):
                 WHERE table_name = 'events' AND column_name = 'is_archived'
             """)
             has_archived_column = c.fetchone() is not None
+            
+            c.execute("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'events' AND column_name = 'subcategory'
+            """)
+            has_subcategory_column = c.fetchone() is not None
         else:
             c.execute("PRAGMA table_info(events)")
             columns = [row[1] for row in c.fetchall()]
             has_archived_column = 'is_archived' in columns
+            has_subcategory_column = 'subcategory' in columns
     except Exception as e:
-        print(f"Error checking for is_archived column: {e}")
+        print(f"Error checking for columns: {e}")
     
     # Auto-archive past events if column exists
     if has_archived_column:
@@ -1124,26 +1133,30 @@ def get_all_events(include_archived: bool = False):
             print(f"Auto-archive error: {e}")
     
     # Build query based on whether is_archived column exists
+    subcategory_col = "subcategory," if has_subcategory_column else ""
+    true_val = "TRUE" if USE_POSTGRES else "1"
+    false_val = "FALSE" if USE_POSTGRES else "0"
+    
     if has_archived_column:
-        query = """
+        query = f"""
          SELECT id, name, description, location, venue, address, coordinates,
-             date, time, end_time, category, subcategory, languages, is_public, event_type, capacity, image_url, created_by, is_featured, is_archived, template_event_id,
+             date, time, end_time, category, {subcategory_col} languages, is_public, event_type, capacity, image_url, created_by, is_featured, is_archived, template_event_id,
                    target_interests, target_cite_connection, target_reasons
             FROM events
-            WHERE is_public = {}
-        """.format("TRUE" if USE_POSTGRES else "1")
+            WHERE is_public = {true_val}
+        """
         
         if not include_archived:
-            query += " AND is_archived = {}".format("FALSE" if USE_POSTGRES else "0")
+            query += f" AND is_archived = {false_val}"
     else:
         # Fallback to old query without is_archived
-        query = """
+        query = f"""
          SELECT id, name, description, location, venue, address, coordinates,
-             date, time, end_time, category, subcategory, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id,
+             date, time, end_time, category, {subcategory_col} languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id,
                    target_interests, target_cite_connection, target_reasons
             FROM events
-            WHERE is_public = {}
-        """.format("TRUE" if USE_POSTGRES else "1")
+            WHERE is_public = {true_val}
+        """
     
     execute_query(c, query)
     events = []
@@ -1165,7 +1178,7 @@ def get_all_events(include_archived: bool = False):
                 crew.append(uname)
         
         if USE_POSTGRES:
-            events.append({
+            event_dict = {
                 "id": event_id,
                 "name": row["name"],
                 "description": row["description"] or "",
@@ -1177,7 +1190,7 @@ def get_all_events(include_archived: bool = False):
                 "time": row["time"] or "",
                 "endTime": row.get("end_time") or "",
                 "category": row["category"] or "",
-                "subcategory": row.get("subcategory") or "",
+                "subcategory": row.get("subcategory", "") if has_subcategory_column else "",
                 "languages": json.loads(row["languages"]) if row["languages"] else [],
                 "isPublic": bool(row["is_public"]),
                 "type": row["event_type"] or "custom",
@@ -1193,73 +1206,77 @@ def get_all_events(include_archived: bool = False):
                 "host": host,
                 "participants": participants,
                 "crew": crew
-            })
+            }
+            events.append(event_dict)
         else:
             # NOTE: SQLite row indexing must align with SELECT order
-            # With is_archived: id(0), name(1), description(2), location(3), venue(4), address(5), coordinates(6),
-            #        date(7), time(8), end_time(9), category(10), languages(11), is_public(12), event_type(13),
-            #        capacity(14), image_url(15), created_by(16), is_featured(17), is_archived(18), template_event_id(19),
-            #        target_interests(20), target_cite_connection(21), target_reasons(22)
-            # Without is_archived: template_event_id is at (18), target_interests at (19), etc.
-            if has_archived_column:
-                events.append({
-                    "id": event_id,
-                    "name": row[1],
-                    "description": row[2] or "",
-                    "location": row[3] or "",
-                    "venue": row[4] or "",
-                    "address": row[5] or "",
-                    "coordinates": json.loads(row[6]) if row[6] else None,
-                    "date": row[7] or "",
-                    "time": row[8] or "",
-                    "endTime": row[9] or "",
-                    "category": row[10] or "",
-                    "languages": json.loads(row[11]) if row[11] else [],
-                    "isPublic": bool(row[12]),
-                    "type": row[13] or "custom",
-                    "capacity": row[14],
-                    "imageUrl": normalize_image_url(row[15] or ""),
-                    "createdBy": row[16],
-                    "isFeatured": bool(row[17]),
-                    "isArchived": bool(row[18]),
-                    "templateEventId": row[19],
-                    "targetInterests": json.loads(row[20]) if row[20] else [],
-                    "targetCiteConnection": json.loads(row[21]) if row[21] else [],
-                    "targetReasons": json.loads(row[22]) if row[22] else [],
-                    "host": host,
-                    "participants": participants,
-                    "crew": crew
-                })
+            # Column indices change based on which optional columns are present
+            # Base: id(0), name(1), description(2), location(3), venue(4), address(5), coordinates(6),
+            #       date(7), time(8), end_time(9), category(10), [subcategory], languages, is_public, event_type,
+            #       capacity, image_url, created_by, is_featured, [is_archived], template_event_id,
+            #       target_interests, target_cite_connection, target_reasons
+            
+            col_idx = 11  # Start after category
+            
+            # Check for subcategory
+            if has_subcategory_column:
+                subcategory = row[col_idx] or ""
+                col_idx += 1
             else:
-                # Without is_archived column - old schema
-                events.append({
-                    "id": event_id,
-                    "name": row[1],
-                    "description": row[2] or "",
-                    "location": row[3] or "",
-                    "venue": row[4] or "",
-                    "address": row[5] or "",
-                    "coordinates": json.loads(row[6]) if row[6] else None,
-                    "date": row[7] or "",
-                    "time": row[8] or "",
-                    "endTime": row[9] or "",
-                    "category": row[10] or "",
-                    "languages": json.loads(row[11]) if row[11] else [],
-                    "isPublic": bool(row[12]),
-                    "type": row[13] or "custom",
-                    "capacity": row[14],
-                    "imageUrl": normalize_image_url(row[15] or ""),
-                    "createdBy": row[16],
-                    "isFeatured": bool(row[17]),
-                    "isArchived": False,  # Default to not archived
-                    "templateEventId": row[18],
-                    "targetInterests": json.loads(row[19]) if row[19] else [],
-                    "targetCiteConnection": json.loads(row[20]) if row[20] else [],
-                    "targetReasons": json.loads(row[21]) if row[21] else [],
-                    "host": host,
-                    "participants": participants,
-                    "crew": crew
-                })
+                subcategory = ""
+            
+            # Continue with remaining columns
+            languages_idx = col_idx
+            is_public_idx = col_idx + 1
+            event_type_idx = col_idx + 2
+            capacity_idx = col_idx + 3
+            image_url_idx = col_idx + 4
+            created_by_idx = col_idx + 5
+            is_featured_idx = col_idx + 6
+            col_idx += 7
+            
+            # Check for is_archived
+            if has_archived_column:
+                is_archived = bool(row[col_idx])
+                col_idx += 1
+            else:
+                is_archived = False
+            
+            # Remaining columns
+            template_event_id_idx = col_idx
+            target_interests_idx = col_idx + 1
+            target_cite_connection_idx = col_idx + 2
+            target_reasons_idx = col_idx + 3
+            
+            events.append({
+                "id": event_id,
+                "name": row[1],
+                "description": row[2] or "",
+                "location": row[3] or "",
+                "venue": row[4] or "",
+                "address": row[5] or "",
+                "coordinates": json.loads(row[6]) if row[6] else None,
+                "date": row[7] or "",
+                "time": row[8] or "",
+                "endTime": row[9] or "",
+                "category": row[10] or "",
+                "subcategory": subcategory,
+                "languages": json.loads(row[languages_idx]) if row[languages_idx] else [],
+                "isPublic": bool(row[is_public_idx]),
+                "type": row[event_type_idx] or "custom",
+                "capacity": row[capacity_idx],
+                "imageUrl": normalize_image_url(row[image_url_idx] or ""),
+                "createdBy": row[created_by_idx],
+                "isFeatured": bool(row[is_featured_idx]),
+                "isArchived": is_archived,
+                "templateEventId": row[template_event_id_idx],
+                "targetInterests": json.loads(row[target_interests_idx]) if row[target_interests_idx] else [],
+                "targetCiteConnection": json.loads(row[target_cite_connection_idx]) if row[target_cite_connection_idx] else [],
+                "targetReasons": json.loads(row[target_reasons_idx]) if row[target_reasons_idx] else [],
+                "host": host,
+                "participants": participants,
+                "crew": crew
+            })
     conn.close()
     return events
 
