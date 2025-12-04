@@ -1859,7 +1859,7 @@ def get_user_events(username: str):
     if has_archived_column:
         query = """
             SELECT DISTINCT e.id, e.name, e.description, e.location, e.venue, e.address, e.coordinates,
-                   e.date, e.time, e.end_time, e.category, e.languages, e.is_public, e.event_type, e.capacity, e.image_url, e.created_by, e.is_featured, e.template_event_id, e.is_archived
+                   e.date, e.time, e.end_time, e.category, e.subcategory, e.languages, e.is_public, e.event_type, e.capacity, e.image_url, e.created_by, e.is_featured, e.template_event_id, e.is_archived
             FROM events e
             JOIN event_participants ep ON e.id = ep.event_id
             WHERE ep.username = ?
@@ -1867,7 +1867,7 @@ def get_user_events(username: str):
     else:
         query = """
             SELECT DISTINCT e.id, e.name, e.description, e.location, e.venue, e.address, e.coordinates,
-                   e.date, e.time, e.end_time, e.category, e.languages, e.is_public, e.event_type, e.capacity, e.image_url, e.created_by, e.is_featured, e.template_event_id
+                   e.date, e.time, e.end_time, e.category, e.subcategory, e.languages, e.is_public, e.event_type, e.capacity, e.image_url, e.created_by, e.is_featured, e.template_event_id
             FROM events e
             JOIN event_participants ep ON e.id = ep.event_id
             WHERE ep.username = ?
@@ -1904,6 +1904,7 @@ def get_user_events(username: str):
                 "time": row["time"] or "",
                 "endTime": row.get("end_time") or "",
                 "category": row["category"] or "",
+                "subcategory": row.get("subcategory") or "",
                 "languages": json.loads(row["languages"]) if row["languages"] else [],
                 "isPublic": bool(row["is_public"]),
                 "type": row["event_type"] or "custom",
@@ -1932,20 +1933,21 @@ def get_user_events(username: str):
                 "time": row[8] or "",
                 "endTime": row[9] or "",
                 "category": row[10] or "",
-                "languages": json.loads(row[11]) if row[11] else [],
-                "isPublic": bool(row[12]),
-                "type": row[13] or "custom",
-                "capacity": row[14],
-                "imageUrl": normalize_image_url(row[15] or ""),
-                "createdBy": row[16],
-                "isFeatured": bool(row[17]),
-                "templateEventId": row[18],
+                "subcategory": row[11] or "",
+                "languages": json.loads(row[12]) if row[12] else [],
+                "isPublic": bool(row[13]),
+                "type": row[14] or "custom",
+                "capacity": row[15],
+                "imageUrl": normalize_image_url(row[16] or ""),
+                "createdBy": row[17],
+                "isFeatured": bool(row[18]),
+                "templateEventId": row[19],
                 "host": host,
                 "participants": participants,
                 "crew": crew
             }
             if has_archived_column:
-                event_dict["isArchived"] = bool(row[19])
+                event_dict["isArchived"] = bool(row[20])
             events.append(event_dict)
     conn.close()
     return events
