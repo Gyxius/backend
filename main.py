@@ -56,12 +56,11 @@ def _get_allowed_origins():
 allowed_origins = _get_allowed_origins()
 print(f"🌐 Starting with CORS origins: {allowed_origins}")
 
-# Use allow_origin_regex for Netlify preview deploys
+# CORS configuration - allow all origins temporarily for debugging
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
-    allow_origin_regex=r"https://.*\.netlify\.app",  # Allow all Netlify preview deploys
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,  # Must be False when using allow_origins=["*"]
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],
