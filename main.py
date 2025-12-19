@@ -40,7 +40,7 @@ def _get_allowed_origins():
     origins = os.environ.get("FRONTEND_ORIGINS") or os.environ.get("FRONTEND_ORIGIN")
     if origins:
         origins_list = [o.strip() for o in origins.split(",") if o.strip()]
-        print(f"🔒 CORS: Allowing origins: {origins_list}")
+        print(f"🔒 CORS: Allowing origins from env: {origins_list}")
         return origins_list
     
     # Default to common origins if not set
@@ -48,7 +48,7 @@ def _get_allowed_origins():
         "http://localhost:3000",
         "http://localhost:3001", 
         "https://joinlemi.netlify.app",
-        "https://*.netlify.app"  # Allow all Netlify preview deploys
+        "https://lemi-cite.netlify.app"
     ]
     print(f"⚠️  CORS: No FRONTEND_ORIGINS set, using defaults: {default_origins}")
     return default_origins
@@ -56,12 +56,15 @@ def _get_allowed_origins():
 allowed_origins = _get_allowed_origins()
 print(f"🌐 Starting with CORS origins: {allowed_origins}")
 
+# Use allow_origin_regex for Netlify preview deploys
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
+    allow_origin_regex=r"https://.*\.netlify\.app",  # Allow all Netlify preview deploys
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # Run database migration on startup
