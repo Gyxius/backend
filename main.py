@@ -2002,7 +2002,7 @@ def get_follows(username: str):
     conn = get_db_connection()
     c = conn.cursor()
     execute_query(c, "SELECT user2 FROM follows WHERE user1 = ?", (username,))
-    follows = [row[0] for row in c.fetchall()]
+    follows = [row["user2"] if USE_POSTGRES else row[0] for row in c.fetchall()]
     conn.close()
     return follows
 
@@ -2012,7 +2012,7 @@ def get_followers(username: str):
     conn = get_db_connection()
     c = conn.cursor()
     execute_query(c, "SELECT user1 FROM follows WHERE user2 = ?", (username,))
-    followers = [row[0] for row in c.fetchall()]
+    followers = [row["user1"] if USE_POSTGRES else row[0] for row in c.fetchall()]
     conn.close()
     return followers
 
