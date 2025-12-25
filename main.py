@@ -1840,8 +1840,9 @@ def get_user_events(username: str):
     conn = get_db_connection()
     c = conn.cursor()
     
-    # Check if is_archived column exists
+    # Check if is_archived and subcategory columns exist
     has_archived_column = False
+    has_subcategory_column = False
     try:
         if USE_POSTGRES:
             c.execute("""
@@ -1850,26 +1851,36 @@ def get_user_events(username: str):
                 WHERE table_name = 'events' AND column_name = 'is_archived'
             """)
             has_archived_column = c.fetchone() is not None
+            c.execute("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'events' AND column_name = 'subcategory'
+            """)
+            has_subcategory_column = c.fetchone() is not None
         else:
             c.execute("PRAGMA table_info(events)")
             columns = [row[1] for row in c.fetchall()]
             has_archived_column = 'is_archived' in columns
+            has_subcategory_column = 'subcategory' in columns
     except Exception as e:
-        print(f"Error checking for is_archived column: {e}")
+        print(f"Error checking for columns: {e}")
+    
+    # Build subcategory column part
+    subcategory_col = "e.subcategory," if has_subcategory_column else ""
     
     # Build query with or without is_archived
     if has_archived_column:
-        query = """
+        query = f"""
             SELECT DISTINCT e.id, e.name, e.description, e.location, e.venue, e.address, e.coordinates,
-                   e.date, e.time, e.end_time, e.category, e.subcategory, e.languages, e.is_public, e.event_type, e.capacity, e.image_url, e.created_by, e.is_featured, e.template_event_id, e.is_archived
+                   e.date, e.time, e.end_time, e.category, {subcategory_col} e.languages, e.is_public, e.event_type, e.capacity, e.image_url, e.created_by, e.is_featured, e.template_event_id, e.is_archived
             FROM events e
             JOIN event_participants ep ON e.id = ep.event_id
             WHERE ep.username = ?
         """
     else:
-        query = """
+        query = f"""
             SELECT DISTINCT e.id, e.name, e.description, e.location, e.venue, e.address, e.coordinates,
-                   e.date, e.time, e.end_time, e.category, e.subcategory, e.languages, e.is_public, e.event_type, e.capacity, e.image_url, e.created_by, e.is_featured, e.template_event_id
+                   e.date, e.time, e.end_time, e.category, {subcategory_col} e.languages, e.is_public, e.event_type, e.capacity, e.image_url, e.created_by, e.is_featured, e.template_event_id
             FROM events e
             JOIN event_participants ep ON e.id = ep.event_id
             WHERE ep.username = ?
@@ -1923,33 +1934,64 @@ def get_user_events(username: str):
                 event_dict["isArchived"] = bool(row["is_archived"])
             events.append(event_dict)
         else:
+            # SQLite: handle dynamic column positions
+            col_idx = 0
+            event_id_val = row[col_idx]; col_idx += 1
+            name_val = row[col_idx]; col_idx += 1
+            description_val = row[col_idx]; col_idx += 1
+            location_val = row[col_idx]; col_idx += 1
+            venue_val = row[col_idx]; col_idx += 1
+            address_val = row[col_idx]; col_idx += 1
+            coordinates_val = row[col_idx]; col_idx += 1
+            date_val = row[col_idx]; col_idx += 1
+            time_val = row[col_idx]; col_idx += 1
+            end_time_val = row[col_idx]; col_idx += 1
+            category_val = row[col_idx]; col_idx += 1
+            
+            # Subcategory is optional
+            if has_subcategory_column:
+                subcategory_val = row[col_idx] or ""
+                col_idx += 1
+            else:
+                subcategory_val = ""
+            
+            languages_val = row[col_idx]; col_idx += 1
+            is_public_val = row[col_idx]; col_idx += 1
+            event_type_val = row[col_idx]; col_idx += 1
+            capacity_val = row[col_idx]; col_idx += 1
+            image_url_val = row[col_idx]; col_idx += 1
+            created_by_val = row[col_idx]; col_idx += 1
+            is_featured_val = row[col_idx]; col_idx += 1
+            template_event_id_val = row[col_idx]; col_idx += 1
+            
             event_dict = {
-                "id": event_id,
-                "name": row[1],
-                "description": row[2] or "",
-                "location": row[3] or "",
-                "venue": row[4] or "",
-                "address": row[5] or "",
-                "coordinates": json.loads(row[6]) if row[6] else None,
-                "date": row[7] or "",
-                "time": row[8] or "",
-                "endTime": row[9] or "",
-                "category": row[10] or "",
-                "subcategory": row[11] or "",
-                "languages": json.loads(row[12]) if row[12] else [],
-                "isPublic": bool(row[13]),
-                "type": row[14] or "custom",
-                "capacity": row[15],
-                "imageUrl": normalize_image_url(row[16] or ""),
-                "createdBy": row[17],
-                "isFeatured": bool(row[18]),
-                "templateEventId": row[19],
+                "id": event_id_val,
+                "name": name_val,
+                "description": description_val or "",
+                "location": location_val or "",
+                "venue": venue_val or "",
+                "address": address_val or "",
+                "coordinates": json.loads(coordinates_val) if coordinates_val else None,
+                "date": date_val or "",
+                "time": time_val or "",
+                "endTime": end_time_val or "",
+                "category": category_val or "",
+                "subcategory": subcategory_val,
+                "languages": json.loads(languages_val) if languages_val else [],
+                "isPublic": bool(is_public_val),
+                "type": event_type_val or "custom",
+                "capacity": capacity_val,
+                "imageUrl": normalize_image_url(image_url_val or ""),
+                "createdBy": created_by_val,
+                "isFeatured": bool(is_featured_val),
+                "templateEventId": template_event_id_val,
                 "host": host,
                 "participants": participants,
                 "crew": crew
             }
             if has_archived_column:
-                event_dict["isArchived"] = bool(row[20])
+                is_archived_val = row[col_idx]
+                event_dict["isArchived"] = bool(is_archived_val)
             events.append(event_dict)
     conn.close()
     return events
