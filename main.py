@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Dict, Optional
 import psycopg2
@@ -12,6 +13,7 @@ import sqlite3
 import shutil
 from pathlib import Path
 from datetime import datetime
+import traceback
 
 # Optional S3 support for persistent image storage
 try:
@@ -65,6 +67,24 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["*"],
 )
+
+# Global exception handler to ensure CORS headers are always included
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Catch all unhandled exceptions and return proper CORS headers"""
+    print(f"❌ Unhandled exception: {exc}")
+    print(f"❌ Traceback: {traceback.format_exc()}")
+    
+    # Return JSON response with CORS headers
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Internal server error: {str(exc)}"},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
 
 # Run database migration on startup
 def run_startup_migrations():
@@ -1395,62 +1415,101 @@ def get_event_by_id(event_id: int):
 @app.post("/api/events")
 def create_full_event(event: FullEvent):
     """Create a new event"""
-    conn = get_db_connection()
-    c = conn.cursor()
-    # Safety: if running on Postgres and the template_event_id column is of wrong type (e.g., uuid),
-    # avoid 500 by sending NULL until migration fixes it.
-    tpl_value = getattr(event, 'template_event_id', None)
-    if USE_POSTGRES:
-        try:
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        
+        # Log the incoming request for debugging
+        print(f"📝 Creating event: {event.name} by {event.created_by}")
+        
+        # Safety: if running on Postgres and the template_event_id column is of wrong type (e.g., uuid),
+        # avoid 500 by sending NULL until migration fixes it.
+        tpl_value = getattr(event, 'template_event_id', None)
+        if USE_POSTGRES:
+            try:
+                c.execute(
+                    """
+                    SELECT data_type
+                    FROM information_schema.columns 
+                    WHERE table_schema = current_schema()
+                      AND table_name='events' 
+                      AND column_name='template_event_id'
+                    """
+                )
+                r = c.fetchone()
+                if r:
+                    dt = str(list(r.values())[0] if isinstance(r, dict) else r[0]).lower()
+                    if dt not in ("integer", "bigint", "smallint"):
+                        # Log once per process start would be nicer, but print here is fine.
+                        print("⚠️  template_event_id column is not INTEGER yet; inserting NULL to avoid failure.")
+                        tpl_value = None
+            except Exception as _e:
+                # If introspection fails, proceed without blocking creation
+                pass
+        
+        # Basic validation: if both time and end_time are provided, ensure end_time > time (HH:MM)
+        # Allow cross-midnight times (e.g., 22:30 → 02:00 treated as next day)
+        def _to_minutes(t: Optional[str]) -> Optional[int]:
+            if not t:
+                return None
+            try:
+                h, m = t.split(":")
+                return int(h) * 60 + int(m)
+            except Exception:
+                return None
+        if event.time and event.end_time:
+            start_m = _to_minutes(event.time)
+            end_m = _to_minutes(event.end_time)
+            # If end_m <= start_m, assume it's next day (cross-midnight); no error
+            # Only reject if end_m == start_m (same time)
+            if start_m is not None and end_m is not None and end_m == start_m:
+                conn.close()
+                raise HTTPException(status_code=400, detail="endTime cannot be the same as start time")
+
+        # Insert event and get the new id for both SQLite and PostgreSQL
+        if USE_POSTGRES:
             c.execute(
                 """
-                SELECT data_type
-                FROM information_schema.columns 
-                WHERE table_schema = current_schema()
-                  AND table_name='events' 
-                  AND column_name='template_event_id'
-                """
+                INSERT INTO events (name, description, location, venue, address, coordinates,
+                                  date, time, end_time, category, subcategory, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id,
+                                  target_interests, target_cite_connection, target_reasons)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+                """,
+                (
+                    event.name,
+                    event.description,
+                    event.location,
+                    event.venue,
+                    event.address,
+                    json.dumps(event.coordinates) if event.coordinates else None,
+                    event.date,
+                    event.time,
+                    event.end_time,
+                    event.category,
+                    event.subcategory,
+                    json.dumps(event.languages),
+                    True if event.is_public else False,
+                    event.event_type,
+                    event.capacity,
+                    event.image_url,
+                    event.created_by,
+                    getattr(event, 'is_featured', False),
+                    tpl_value,
+                    json.dumps(getattr(event, 'target_interests', None)) if getattr(event, 'target_interests', None) else None,
+                    json.dumps(getattr(event, 'target_cite_connection', None)) if getattr(event, 'target_cite_connection', None) else None,
+                    json.dumps(getattr(event, 'target_reasons', None)) if getattr(event, 'target_reasons', None) else None,
+                ),
             )
-            r = c.fetchone()
-            if r:
-                dt = str(list(r.values())[0] if isinstance(r, dict) else r[0]).lower()
-                if dt not in ("integer", "bigint", "smallint"):
-                    # Log once per process start would be nicer, but print here is fine.
-                    print("⚠️  template_event_id column is not INTEGER yet; inserting NULL to avoid failure.")
-                    tpl_value = None
-        except Exception as _e:
-            # If introspection fails, proceed without blocking creation
-            pass
-    # Basic validation: if both time and end_time are provided, ensure end_time > time (HH:MM)
-    # Allow cross-midnight times (e.g., 22:30 → 02:00 treated as next day)
-    def _to_minutes(t: Optional[str]) -> Optional[int]:
-        if not t:
-            return None
-        try:
-            h, m = t.split(":")
-            return int(h) * 60 + int(m)
-        except Exception:
-            return None
-    if event.time and event.end_time:
-        start_m = _to_minutes(event.time)
-        end_m = _to_minutes(event.end_time)
-        # If end_m <= start_m, assume it's next day (cross-midnight); no error
-        # Only reject if end_m == start_m (same time)
-        if start_m is not None and end_m is not None and end_m == start_m:
-            conn.close()
-            raise HTTPException(status_code=400, detail="endTime cannot be the same as start time")
-
-    # Insert event and get the new id for both SQLite and PostgreSQL
-    if USE_POSTGRES:
-        c.execute(
-            """
-            INSERT INTO events (name, description, location, venue, address, coordinates,
-                              date, time, end_time, category, subcategory, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id,
-                              target_interests, target_cite_connection, target_reasons)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING id
-            """,
-            (
+            row = c.fetchone()
+            event_id = row["id"] if (hasattr(row, "keys") or isinstance(row, dict)) else row[0]
+        else:
+            execute_query(c, """
+                INSERT INTO events (name, description, location, venue, address, coordinates, 
+                                  date, time, end_time, category, subcategory, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id,
+                                  target_interests, target_cite_connection, target_reasons)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
                 event.name,
                 event.description,
                 event.location,
@@ -1463,72 +1522,54 @@ def create_full_event(event: FullEvent):
                 event.category,
                 event.subcategory,
                 json.dumps(event.languages),
-                True if event.is_public else False,
+                1 if event.is_public else 0,
                 event.event_type,
                 event.capacity,
                 event.image_url,
                 event.created_by,
-                getattr(event, 'is_featured', False),
-                tpl_value,
+                1 if getattr(event, 'is_featured', False) else 0,
+                getattr(event, 'template_event_id', None),
                 json.dumps(getattr(event, 'target_interests', None)) if getattr(event, 'target_interests', None) else None,
                 json.dumps(getattr(event, 'target_cite_connection', None)) if getattr(event, 'target_cite_connection', None) else None,
                 json.dumps(getattr(event, 'target_reasons', None)) if getattr(event, 'target_reasons', None) else None,
-            ),
-        )
-        row = c.fetchone()
-        event_id = row["id"] if (hasattr(row, "keys") or isinstance(row, dict)) else row[0]
-    else:
-        execute_query(c, """
-            INSERT INTO events (name, description, location, venue, address, coordinates, 
-                              date, time, end_time, category, subcategory, languages, is_public, event_type, capacity, image_url, created_by, is_featured, template_event_id,
-                              target_interests, target_cite_connection, target_reasons)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            event.name,
-            event.description,
-            event.location,
-            event.venue,
-            event.address,
-            json.dumps(event.coordinates) if event.coordinates else None,
-            event.date,
-            event.time,
-            event.end_time,
-            event.category,
-            event.subcategory,
-            json.dumps(event.languages),
-            1 if event.is_public else 0,
-            event.event_type,
-            event.capacity,
-            event.image_url,
-            event.created_by,
-            1 if getattr(event, 'is_featured', False) else 0,
-            getattr(event, 'template_event_id', None),
-            json.dumps(getattr(event, 'target_interests', None)) if getattr(event, 'target_interests', None) else None,
-            json.dumps(getattr(event, 'target_cite_connection', None)) if getattr(event, 'target_cite_connection', None) else None,
-            json.dumps(getattr(event, 'target_reasons', None)) if getattr(event, 'target_reasons', None) else None,
-        ))
-        event_id = c.lastrowid
-    
-    # Add creator as host/participant
-    if event.created_by:
-        if USE_POSTGRES:
-            c.execute(
-                """
-                INSERT INTO event_participants (event_id, username, is_host)
-                VALUES (%s, %s, 1)
-                ON CONFLICT DO NOTHING
-                """,
-                (event_id, event.created_by),
-            )
-        else:
-            execute_query(c, """
-                INSERT OR IGNORE INTO event_participants (event_id, username, is_host)
-                VALUES (?, ?, 1)
-            """, (event_id, event.created_by))
-    
-    conn.commit()
-    conn.close()
-    return {"id": event_id, "message": "Event created"}
+            ))
+            event_id = c.lastrowid
+        
+        # Add creator as host/participant
+        if event.created_by:
+            try:
+                if USE_POSTGRES:
+                    c.execute(
+                        """
+                        INSERT INTO event_participants (event_id, username, is_host)
+                        VALUES (%s, %s, 1)
+                        ON CONFLICT DO NOTHING
+                        """,
+                        (event_id, event.created_by),
+                    )
+                else:
+                    execute_query(c, """
+                        INSERT OR IGNORE INTO event_participants (event_id, username, is_host)
+                        VALUES (?, ?, 1)
+                    """, (event_id, event.created_by))
+            except Exception as e:
+                # Log but don't fail if adding participant fails
+                print(f"⚠️  Could not add creator as participant: {e}")
+        
+        conn.commit()
+        conn.close()
+        
+        print(f"✅ Event created successfully with ID: {event_id}")
+        return {"id": event_id, "message": "Event created successfully"}
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions (like 400 validation errors)
+        raise
+    except Exception as e:
+        # Log the full error and re-raise to be caught by global handler
+        print(f"❌ Error creating event: {e}")
+        print(f"❌ Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Failed to create event: {str(e)}")
 
 @app.post("/api/events/{event_id}/join")
 def join_full_event(event_id: int, username: str = Body(..., embed=True)):
