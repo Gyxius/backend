@@ -134,7 +134,54 @@ def run_startup_migrations():
         conn.close()
         
     except Exception as e:
-        print(f"⚠️  Migration warning: {e}")
+        print(f"⚠️  Migration warning (is_archived): {e}")
+    
+    # Migration 2: Add subcategory column
+    try:
+        if USE_POSTGRES:
+            import psycopg2
+            from psycopg2.extras import RealDictCursor
+            db_url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+            conn = psycopg2.connect(db_url, cursor_factory=RealDictCursor)
+        else:
+            conn = sqlite3.connect("./social.db")
+        
+        c = conn.cursor()
+        
+        # Check if subcategory column exists
+        if USE_POSTGRES:
+            c.execute("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'events' AND column_name = 'subcategory'
+            """)
+            existing = c.fetchone()
+            if existing:
+                print("✅ subcategory column already exists")
+                conn.close()
+                return
+            
+            # Add the column
+            print("📝 Adding subcategory column to events table...")
+            c.execute("ALTER TABLE events ADD COLUMN subcategory TEXT DEFAULT ''")
+        else:
+            c.execute("PRAGMA table_info(events)")
+            columns = [row[1] for row in c.fetchall()]
+            if 'subcategory' in columns:
+                print("✅ subcategory column already exists")
+                conn.close()
+                return
+            
+            # Add the column
+            print("📝 Adding subcategory column to events table...")
+            c.execute("ALTER TABLE events ADD COLUMN subcategory TEXT DEFAULT ''")
+        
+        conn.commit()
+        print("✅ Successfully added subcategory column to events table")
+        conn.close()
+        
+    except Exception as e:
+        print(f"⚠️  Migration warning (subcategory): {e}")
 
 # Run migrations on startup
 run_startup_migrations()
