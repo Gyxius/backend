@@ -15,7 +15,9 @@ if not DATABASE_URL:
 print(f"🔗 Connecting to database...")
 
 try:
-    conn = psycopg2.connect(DATABASE_URL)
+    # Fix Render's postgres:// to postgresql://
+    db_url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+    conn = psycopg2.connect(db_url)
     cursor = conn.cursor()
     
     print("✅ Connected to database")

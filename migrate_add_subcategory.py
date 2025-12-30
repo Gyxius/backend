@@ -7,8 +7,8 @@ import sqlite3
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
-USE_POSTGRES = os.environ.get("USE_POSTGRES", "").lower() in ("true", "1", "yes")
 DATABASE_URL = os.environ.get("DATABASE_URL")
+USE_POSTGRES = DATABASE_URL is not None
 
 def migrate_sqlite():
     """Add subcategory column to SQLite database"""
@@ -40,7 +40,9 @@ def migrate_postgres():
         print("❌ DATABASE_URL not set for PostgreSQL")
         return
     
-    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+    # Fix Render's postgres:// to postgresql://
+    db_url = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+    conn = psycopg2.connect(db_url, cursor_factory=RealDictCursor)
     c = conn.cursor()
     
     try:
