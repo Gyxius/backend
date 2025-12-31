@@ -2124,6 +2124,30 @@ def add_follow(user1: str = Body(...), user2: str = Body(...)):
     conn.close()
     return {"message": "Follow added"}
 
+@app.delete("/api/follows")
+def remove_follow(user1: str = Body(...), user2: str = Body(...)):
+    """Remove a follow (unfollow)"""
+    conn = get_db_connection()
+    c = conn.cursor()
+    if USE_POSTGRES:
+        c.execute(
+            """
+            DELETE FROM follows
+            WHERE user1 = %s AND user2 = %s
+            """,
+            (user1, user2),
+        )
+    else:
+        execute_query(c, "DELETE FROM follows WHERE user1 = ? AND user2 = ?", (user1, user2))
+    conn.commit()
+    rows_affected = c.rowcount
+    conn.close()
+    
+    if rows_affected > 0:
+        return {"message": "Follow removed"}
+    else:
+        raise HTTPException(status_code=404, detail="Follow relationship not found")
+
 @app.get("/api/chat/{event_id}")
 def get_chat_messages(event_id: int):
     """Get chat messages for an event"""
