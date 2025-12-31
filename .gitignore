@@ -19,3 +19,7 @@ social.db
 # Editor
 .vscode/
 .idea/
+
+# Logs
+*.log
+server.log
