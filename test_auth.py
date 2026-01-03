@@ -455,7 +455,7 @@ class AuthTester:
         self.test_profile_management()
         self.test_invite_codes()
         
-        self.print_summary()
+        return self.print_summary()
     
     def print_summary(self):
         """Print test results summary"""
@@ -491,12 +491,13 @@ def main():
     
     if args.local:
         tester = AuthTester(LOCAL_API, "LOCAL")
-        exit_code = tester.run_all_tests()
+        code = tester.run_all_tests()
+        exit_code = max(exit_code, code if code is not None else 0)
     
     if args.deployed:
         tester = AuthTester(DEPLOYED_API, "DEPLOYED")
         code = tester.run_all_tests()
-        exit_code = max(exit_code, code)
+        exit_code = max(exit_code, code if code is not None else 0)
     
     sys.exit(exit_code)
 
