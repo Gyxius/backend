@@ -104,7 +104,7 @@ class AuthTester:
         
         try:
             response = requests.post(
-                f"{self.api_url}/api/register",
+                f"{self.api_url}/register",
                 json=user_data,
                 headers={"Content-Type": "application/json"}
             )
@@ -125,7 +125,7 @@ class AuthTester:
         print_test("Test 2: Duplicate username registration")
         try:
             response = requests.post(
-                f"{self.api_url}/api/register",
+                f"{self.api_url}/register",
                 json=user_data,
                 headers={"Content-Type": "application/json"}
             )
@@ -145,7 +145,7 @@ class AuthTester:
         
         try:
             response = requests.post(
-                f"{self.api_url}/api/register",
+                f"{self.api_url}/register",
                 json=invalid_user,
                 headers={"Content-Type": "application/json"}
             )
@@ -184,7 +184,7 @@ class AuthTester:
         
         try:
             response = requests.post(
-                f"{self.api_url}/api/register",
+                f"{self.api_url}/register",
                 json=user_data,
                 headers={"Content-Type": "application/json"}
             )
@@ -200,7 +200,7 @@ class AuthTester:
         print_test("Test 1: Login with correct credentials")
         try:
             response = requests.post(
-                f"{self.api_url}/api/login",
+                f"{self.api_url}/login",
                 json={"username": username, "password": password},
                 headers={"Content-Type": "application/json"}
             )
@@ -216,7 +216,7 @@ class AuthTester:
         print_test("Test 2: Login with wrong password")
         try:
             response = requests.post(
-                f"{self.api_url}/api/login",
+                f"{self.api_url}/login",
                 json={"username": username, "password": "WrongPassword123!"},
                 headers={"Content-Type": "application/json"}
             )
@@ -232,7 +232,7 @@ class AuthTester:
         print_test("Test 3: Login with non-existent user")
         try:
             response = requests.post(
-                f"{self.api_url}/api/login",
+                f"{self.api_url}/login",
                 json={"username": f"nonexistent_{timestamp}", "password": "Any123!"},
                 headers={"Content-Type": "application/json"}
             )
@@ -248,7 +248,7 @@ class AuthTester:
         print_test("Test 4: Case-insensitive username login")
         try:
             response = requests.post(
-                f"{self.api_url}/api/login",
+                f"{self.api_url}/login",
                 json={"username": username.upper(), "password": password},
                 headers={"Content-Type": "application/json"}
             )
@@ -285,7 +285,7 @@ class AuthTester:
         
         try:
             response = requests.post(
-                f"{self.api_url}/api/register",
+                f"{self.api_url}/register",
                 json=user_data,
                 headers={"Content-Type": "application/json"}
             )
@@ -294,27 +294,49 @@ class AuthTester:
         except Exception as e:
             print_info(f"Registration error: {str(e)}")
         
-        # Test 1: Get user profile
-        print_test("Test 1: Get user profile")
+        # Test 1: Create and get user profile
+        print_test("Test 1: Create and get user profile")
+        
+        # First create a profile
+        profile_data = {
+            "data": {
+                "interests": ["sports", "music"],
+                "languages": ["English", "French"],
+                "citeConnection": "yes",
+                "reasonsForComing": ["studies"],
+                "hometown": "London"
+            }
+        }
+        
         try:
+            # Create profile
+            response = requests.post(
+                f"{self.api_url}/api/users/{username}/profile",
+                json=profile_data,
+                headers={"Content-Type": "application/json"}
+            )
+            
+            # Then get it
             response = requests.get(f"{self.api_url}/api/users/{username}/profile")
             self.assert_equal(response.status_code, 200, "Profile retrieved")
             
+            
             if response.status_code == 200:
                 profile = response.json()
-                self.assert_true("username" in profile, "Profile contains username")
-                self.assert_equal(profile.get("username"), username, "Username matches")
+                self.assert_true("interests" in profile, "Profile contains interests")
         except Exception as e:
-            self.assert_true(False, f"Get profile failed: {str(e)}")
+            self.assert_true(False, f"Create/get profile failed: {str(e)}")
         
         # Test 2: Update user profile
         print_test("Test 2: Update user profile")
         profile_update = {
-            "interests": ["sports", "music", "food"],
-            "languages": ["English", "French"],
-            "citeConnection": "yes",
-            "reasonsForComing": ["studies", "work"],
-            "hometown": "London"
+            "data": {
+                "interests": ["sports", "music", "food"],
+                "languages": ["English", "French"],
+                "citeConnection": "yes",
+                "reasonsForComing": ["studies", "work"],
+                "hometown": "London"
+            }
         }
         
         try:
@@ -379,7 +401,7 @@ class AuthTester:
         
         try:
             response = requests.post(
-                f"{self.api_url}/api/register",
+                f"{self.api_url}/register",
                 json=user_data,
                 headers={"Content-Type": "application/json"}
             )
@@ -388,23 +410,24 @@ class AuthTester:
         except Exception as e:
             print_info(f"Registration error: {str(e)}")
         
-        # Test 1: Get user's invite code
-        print_test("Test 1: Get user's invite code")
+        # Test 1: Create and get user's invite code
+        print_test("Test 1: Create and get user's invite code")
         invite_code = None
         try:
-            response = requests.get(f"{self.api_url}/api/users/{username}/invite-code")
+            # First create the invite code
+            response = requests.post(f"{self.api_url}/api/users/{username}/invite-code")
             
-            if response.status_code == 200:
+            if response.status_code in [200, 201]:
                 data = response.json()
                 invite_code = data.get("invite_code")
                 self.assert_true(invite_code is not None, "Invite code generated")
                 print_info(f"Invite code: {invite_code}")
             else:
-                print_info("Invite codes may not be implemented yet")
-                self.passed += 1
+                print_info(f"Failed to create invite code: {response.status_code}")
+                self.failed += 1
         except Exception as e:
-            print_info(f"Invite code feature may not be available: {str(e)}")
-            self.passed += 1
+            print_info(f"Invite code feature error: {str(e)}")
+            self.failed += 1
         
         # Test 2: Validate invite code
         if invite_code:
