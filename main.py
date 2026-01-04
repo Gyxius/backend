@@ -1910,8 +1910,8 @@ def unarchive_event(event_id: int, username: str):
         raise HTTPException(status_code=500, detail=f"Failed to unarchive event: {str(e)}")
 
 @app.post("/api/admin/archive-test-events")
-def archive_test_events(admin_username: str):
-    """Archive all events created by TestUser (admin only)"""
+def archive_test_events(admin_username: str, include_null_creator: bool = True):
+    """Archive all events created by TestUser or with NULL creator (admin only)"""
     if admin_username.lower() != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     
@@ -1921,17 +1921,33 @@ def archive_test_events(admin_username: str):
     try:
         # Get count of events to archive
         if USE_POSTGRES:
-            c.execute("""
-                SELECT COUNT(*) as count
-                FROM events 
-                WHERE created_by = %s AND is_archived = FALSE
-            """, ('TestUser',))
+            if include_null_creator:
+                c.execute("""
+                    SELECT COUNT(*) as count
+                    FROM events 
+                    WHERE (created_by = %s OR created_by IS NULL OR LOWER(name) LIKE %s) 
+                    AND is_archived = FALSE
+                """, ('TestUser', '%test%'))
+            else:
+                c.execute("""
+                    SELECT COUNT(*) as count
+                    FROM events 
+                    WHERE created_by = %s AND is_archived = FALSE
+                """, ('TestUser',))
         else:
-            c.execute("""
-                SELECT COUNT(*) as count
-                FROM events 
-                WHERE created_by = ? AND is_archived = 0
-            """, ('TestUser',))
+            if include_null_creator:
+                c.execute("""
+                    SELECT COUNT(*) as count
+                    FROM events 
+                    WHERE (created_by = ? OR created_by IS NULL OR LOWER(name) LIKE ?) 
+                    AND is_archived = 0
+                """, ('TestUser', '%test%'))
+            else:
+                c.execute("""
+                    SELECT COUNT(*) as count
+                    FROM events 
+                    WHERE created_by = ? AND is_archived = 0
+                """, ('TestUser',))
         
         result = c.fetchone()
         count = result["count"] if USE_POSTGRES else result[0]
@@ -1942,17 +1958,33 @@ def archive_test_events(admin_username: str):
         
         # Archive the events
         if USE_POSTGRES:
-            c.execute("""
-                UPDATE events 
-                SET is_archived = TRUE 
-                WHERE created_by = %s
-            """, ('TestUser',))
+            if include_null_creator:
+                c.execute("""
+                    UPDATE events 
+                    SET is_archived = TRUE 
+                    WHERE (created_by = %s OR created_by IS NULL OR LOWER(name) LIKE %s)
+                    AND is_archived = FALSE
+                """, ('TestUser', '%test%'))
+            else:
+                c.execute("""
+                    UPDATE events 
+                    SET is_archived = TRUE 
+                    WHERE created_by = %s
+                """, ('TestUser',))
         else:
-            c.execute("""
-                UPDATE events 
-                SET is_archived = 1 
-                WHERE created_by = ?
-            """, ('TestUser',))
+            if include_null_creator:
+                c.execute("""
+                    UPDATE events 
+                    SET is_archived = 1 
+                    WHERE (created_by = ? OR created_by IS NULL OR LOWER(name) LIKE ?)
+                    AND is_archived = 0
+                """, ('TestUser', '%test%'))
+            else:
+                c.execute("""
+                    UPDATE events 
+                    SET is_archived = 1 
+                    WHERE created_by = ?
+                """, ('TestUser',))
         
         conn.commit()
         conn.close()
