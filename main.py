@@ -984,45 +984,32 @@ def get_user_profile(username: str):
     row = c.fetchone()
     print(f"📥 [PROFILE] Fetching profile for {username}: row={row}")
     if not row:
-        # Fallback for Admin: synthesize a default profile and upsert
-        if username.lower() == "admin":
-            profile_data = {
-                    "name": "Admin",
-                    "age": None,
-                    "gender": "System",
-                    "nationality": ["International"],
-                    "homeCountries": ["International"],
-                    "bio": "Official Cité Internationale event organizer and administrator.",
-                    "interests": ["Events", "Community", "Culture"],
-                    "languages": ["French", "English"],
-                    "profile_pic": None,
-                    "citeConnection": "staff",
-                    "reasonsForStay": ["work"]
-                }
-            try:
-                pj = json.dumps(profile_data)
-                if USE_POSTGRES:
-                    c2 = conn.cursor()
-                    try:
-                        c2.execute("INSERT INTO user_profiles (username, profile_json) VALUES (%s, %s) ON CONFLICT (username) DO NOTHING", ("Admin", pj))
-                        conn.commit()
-                    finally:
-                        try:
-                            c2.close()
-                        except Exception:
-                            pass
-                else:
-                    execute_query(c, "INSERT OR IGNORE INTO user_profiles (username, profile_json) VALUES (?, ?)", ("Admin", pj))
-                    conn.commit()
-                print("📥 [PROFILE] Synthesized Admin profile on the fly")
-                conn.close()
-                return profile_data
-            except Exception as e:
-                print(f"❌ [PROFILE] Failed to synthesize Admin profile: {e}")
-                conn.close()
-                return profile_data
+        # Check if user exists in users table
+        execute_query(c, "SELECT username FROM users WHERE lower(username) = lower(?)", (username,))
+        user_row = c.fetchone()
+        
+        if not user_row:
+            # User doesn't exist at all - return 404
+            conn.close()
+            raise HTTPException(status_code=404, detail="Profile not found")
+        
+        # User exists but has no profile - return empty profile with username
+        actual_username = user_row['username'] if USE_POSTGRES else user_row[0]
+        print(f"📥 [PROFILE] User {actual_username} exists but has no profile, returning empty profile")
         conn.close()
-        raise HTTPException(status_code=404, detail="Profile not found")
+        return {
+            "name": actual_username,
+            "age": None,
+            "gender": None,
+            "nationality": [],
+            "homeCountries": [],
+            "bio": "",
+            "interests": [],
+            "languages": [],
+            "profile_pic": None,
+            "citeConnection": None,
+            "reasonsForStay": []
+        }
     conn.close()
     try:
         # RealDictCursor returns dict for Postgres, tuple for SQLite
