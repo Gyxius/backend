@@ -1909,6 +1909,63 @@ def unarchive_event(event_id: int, username: str):
         conn.close()
         raise HTTPException(status_code=500, detail=f"Failed to unarchive event: {str(e)}")
 
+@app.post("/api/admin/archive-test-events")
+def archive_test_events(admin_username: str):
+    """Archive all events created by TestUser (admin only)"""
+    if admin_username.lower() != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    conn = get_db_connection()
+    c = conn.cursor()
+    
+    try:
+        # Get count of events to archive
+        if USE_POSTGRES:
+            c.execute("""
+                SELECT COUNT(*) as count
+                FROM events 
+                WHERE created_by = %s AND is_archived = FALSE
+            """, ('TestUser',))
+        else:
+            c.execute("""
+                SELECT COUNT(*) as count
+                FROM events 
+                WHERE created_by = ? AND is_archived = 0
+            """, ('TestUser',))
+        
+        result = c.fetchone()
+        count = result["count"] if USE_POSTGRES else result[0]
+        
+        if count == 0:
+            conn.close()
+            return {"message": "No test events found to archive", "archived_count": 0}
+        
+        # Archive the events
+        if USE_POSTGRES:
+            c.execute("""
+                UPDATE events 
+                SET is_archived = TRUE 
+                WHERE created_by = %s
+            """, ('TestUser',))
+        else:
+            c.execute("""
+                UPDATE events 
+                SET is_archived = 1 
+                WHERE created_by = ?
+            """, ('TestUser',))
+        
+        conn.commit()
+        conn.close()
+        
+        return {
+            "message": f"Successfully archived {count} test events",
+            "archived_count": count
+        }
+        
+    except Exception as e:
+        conn.close()
+        raise HTTPException(status_code=500, detail=f"Failed to archive test events: {str(e)}")
+
 @app.get("/api/users/{username}/events")
 def get_user_events(username: str):
     """Get all events a user has joined or is hosting"""
